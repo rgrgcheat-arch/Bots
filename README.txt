@@ -1,18 +1,25 @@
-RG Shop Bot - PART 3 (FINAL, includes Part 1 + 2)
-==================================================
-Replace ALL files in your GitHub repo with these (main.py, bot.py, web.py, db.py, backup.py, requirements.txt) and redeploy.
+RG Shop Bot - PART 5  (includes Part 1 + 2 + 3 + 4)
+=====================================================
+Replace ALL files in your GitHub repo with these and redeploy. Old data is kept.
+Env variables are the same as before.
 
-NEW Render environment variables (for automatic backup - IMPORTANT on free hosting):
-  GH_TOKEN = GitHub fine-grained token (only your backup repo, permission: Contents = Read and write)
-  GH_REPO  = yourname/rg-backup      (create a PRIVATE repo; it will hold the database backup)
-  (optional) GH_BRANCH = main
-Also set ADMIN_PASS and SECRET_KEY (if ADMIN_PASS is missing a random password is printed in the Render logs).
+NEW in Part 5
+1) Pay UPI (manual): customer gets a QR for your UPI ID + exact amount, pays, taps "I Have Paid" and sends the UTR (or screenshot).
+   YOU get an instant notification with Approve / Reject buttons. Approve = key delivered / wallet credited.
+2) Pay Binance (manual): customer sees the amount (also in USDT), your Binance details, pays, then sends the Binance
+   Order ID / Transaction ID to you. Same notification + Approve / Reject.
+3) Works for both buying a plan and Add Balance (Confirm -> choose payment method).
+   Non-INR users (e.g. BDT) get "Pay Local" (your "other countries" payment text) + Pay Binance.
+4) Pay QR (auto gateway) stays ready but is hidden until you set the gateway in Settings (API will be connected later).
+5) Website -> Settings -> "Manual payments": turn Pay UPI / Pay Binance ON/OFF and write your Binance details.
+   Website -> QR / Manual Payments: review list with proof screenshot, Approve / Reject.
+6) PREMIUM EMOJI FIX / DIAGNOSIS
+   - Website -> Premium Emoji -> "Test premium emoji now"  (or send /emojitest to the bot as admin).
+     It tells you exactly if Telegram accepts premium emoji from this bot, and why not.
+   - Saving emoji IDs now checks every ID with Telegram and warns about wrong IDs.
+   - If Telegram blocks premium emoji the bot automatically shows the normal emoji (buttons never lose their icon).
+   - Also fixed: the dashboard "Total users" number was empty.
 
-NEW in Part 3
-- Auto backup: every change is saved to your private GitHub repo (max once per 3 min). On restart the bot restores it automatically.
-  Extra copy: database file is sent to your Telegram every 6h if changed.
-- Website -> Backup: backup now, download, upload-restore.
-- Website -> Broadcast: send a message to all users (or test only to yourself).
-- Referral commission % on friend's purchases + "Claim to wallet" button in Referral screen.
-- Maintenance mode, low-stock alert level, orders CSV export, dashboard stats (orders/users today).
-- Security: admin login lock (5 wrong tries = 15 min), secure cookies, security headers, bot tap rate-limit.
+IMPORTANT about premium emoji
+Telegram only shows premium emoji from a bot if the account that CREATED the bot in @BotFather has Telegram Premium
+(or the bot has a username bought on Fragment). Premium on the admin account alone is not enough.

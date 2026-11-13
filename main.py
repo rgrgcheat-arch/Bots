@@ -21,6 +21,7 @@ if __name__ == "__main__":
     backup.restore_if_missing()      # fresh Render disk -> pull last backup from GitHub
     db.init()
     threading.Thread(target=keepalive, daemon=True).start()
+    threading.Thread(target=bot.pay_watch, daemon=True).start()
     threading.Thread(target=backup.loop, args=(bot.send_doc_admin,), daemon=True).start()
     from waitress import serve
     threading.Thread(target=lambda: serve(web.app, host="0.0.0.0", port=int(os.getenv("PORT", "10000")), threads=8), daemon=True).start()

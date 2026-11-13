@@ -3,7 +3,11 @@ from flask import Flask, request, session, redirect, url_for, render_template_st
 from datetime import datetime, timezone, timedelta
 from jinja2 import DictLoader
 import io, csv, threading
-import db, bot, backup
+import db, bot, backup, gateway
+try:
+    import segno
+except Exception:
+    segno = None
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
@@ -41,13 +45,13 @@ button{background:var(--ac);color:#fff;border:0;padding:10px 16px;border-radius:
 button.red{background:#d64545}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
 .stat b{font-size:24px;display:block}.stat span{color:var(--mu);font-size:13px}table{width:100%;border-collapse:collapse;font-size:13px}
 td,th{padding:8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}.tw{overflow-x:auto}
-.msg{background:#16301f;border:1px solid #245c37;padding:10px;border-radius:8px;margin-bottom:12px}.mu{color:var(--mu);font-size:13px}
+.msg{white-space:pre-line;background:#16301f;border:1px solid #245c37;padding:10px;border-radius:8px;margin-bottom:12px}.mu{color:var(--mu);font-size:13px}
 .bd{padding:2px 8px;border-radius:99px;background:#232a3b;font-size:12px}.ok{color:#4cd07d}.no{color:#ff6b6b}.wt{color:#ffc857}a.lk{color:var(--ac);text-decoration:none}
 .row{display:flex;gap:8px;align-items:center}.row input{flex:1}
 </style></head><body>
 {% if session.get('ok') %}<nav>
 <a href="/" class="{{ 'on' if tab=='home' }}">Dashboard</a><a href="/emojis" class="{{ 'on' if tab=='emojis' }}">Premium Emoji</a>
-<a href="/products" class="{{ 'on' if tab=='products' }}">Products</a><a href="/deposits" class="{{ 'on' if tab=='deposits' }}">Deposits</a>
+<a href="/products" class="{{ 'on' if tab=='products' }}">Products</a><a href="/deposits" class="{{ 'on' if tab=='deposits' }}">Deposits</a><a href="/payments" class="{{ 'on' if tab=='payments' }}">QR Payments</a><a href="/coupons" class="{{ 'on' if tab=='coupons' }}">Coupons</a>
 <a href="/orders" class="{{ 'on' if tab=='orders' }}">Orders</a><a href="/users" class="{{ 'on' if tab=='users' }}">Users</a>
 <a href="/broadcast" class="{{ 'on' if tab=='broadcast' }}">Broadcast</a><a href="/backup" class="{{ 'on' if tab=='backup' }}">Backup</a>
 <a href="/settings" class="{{ 'on' if tab=='settings' }}">Settings</a>
@@ -62,14 +66,17 @@ LOGIN = """{% extends 'base.html' %}{% block body %}<div class="card" style="max
 HOME = """{% extends 'base.html' %}{% block body %}<h1>Dashboard</h1><div class="grid">
 <div class="card stat"><b>{{ s.users }}</b><span>Total users</span></div><div class="card stat"><b>{{ s.ver }}</b><span>Verified</span></div>
 <div class="card stat"><b>{{ s.orders }}</b><span>Orders</span></div><div class="card stat"><b>{{ '%.2f'|format(s.bal) }}</b><span>Total wallet balance</span></div>
-<div class="card stat"><b><a class="lk" href="/deposits?s=review">{{ s.pend }}</a></b><span>Deposits to review</span></div>
+<div class="card stat"><b><a class="lk" href="/payments">{{ s.pend }}</a></b><span>Deposits to review</span></div>
 <div class="card stat"><b>{{ s.stock }}</b><span>Keys in stock</span></div>
 <div class="card stat"><b>{{ s.o_today }}</b><span>Orders today</span></div><div class="card stat"><b>{{ s.u_today }}</b><span>New users today</span></div></div>
-<div class="card"><h3>Bot status</h3><p class="mu">All parts live: shop, deposits, backup/restore, broadcast, referral commission, maintenance mode, login protection.</p></div>{% endblock %}"""
+<div class="card"><h3>Bot status</h3><p class="mu">All parts live: shop, order summary, Pay QR + auto payment page, Pay UPI / Pay Binance (manual approve), coupons, wallet top-up, backup/restore, broadcast, referral commission, maintenance mode, login protection.</p></div>{% endblock %}"""
 
 EMOJIS = """{% extends 'base.html' %}{% block body %}<h1>Premium Emoji</h1>
 <div class="card"><p class="mu"><b>How to get an emoji ID:</b> open the bot with your admin Telegram account (Premium) and send any premium emoji as a message.
 The bot replies with the ID. Paste it below. Leave blank to use the normal emoji. Changes apply in a few seconds.</p></div>
+<div class="card"><h3>Premium emoji check</h3><p>Status: <b class="{{ 'no' if gs('emoji_mode')=='blocked' else 'ok' }}">{{ 'BLOCKED by Telegram (normal emoji shown)' if gs('emoji_mode')=='blocked' else 'enabled' }}</b></p>
+<p class="mu">Sends one test message to your admin Telegram and tells you exactly why premium emoji do or do not show. You can also send /emojitest to the bot.</p>
+<form method="post" action="/emojis/test"><input type="hidden" name="csrf" value="{{ csrf() }}"><button>Test premium emoji now</button></form></div>
 <form method="post" action="/emojis"><input type="hidden" name="csrf" value="{{ csrf() }}"><div class="card tw"><table>
 <tr><th>Used in</th><th>Normal emoji</th><th>Premium emoji ID</th><th></th></tr>
 {% for e in rows %}<tr><td>{{ e.note }}<br><span class="mu">{{ e.k }}</span></td>
@@ -96,6 +103,21 @@ SETTINGS = """{% extends 'base.html' %}{% block body %}<h1>Settings</h1><form me
 <label>Telegram username or link</label><input name="support_tg" value="{{ gs('support_tg') }}" placeholder="@username">
 <label>WhatsApp support</label><select name="support_wa_on"><option value="1" {{ 'selected' if gs('support_wa_on')=='1' }}>ON</option><option value="0" {{ 'selected' if gs('support_wa_on')!='1' }}>OFF</option></select>
 <label>WhatsApp number (with country code)</label><input name="support_wa" value="{{ gs('support_wa') }}" placeholder="919XXXXXXXXX"></div>
+<div class="card"><h3>QR Payment Gateway (auto payment detect)</h3>
+<p class="mu">Used by <b>Pay QR</b> and <b>Add Balance</b> for India (INR) users. Leave empty to keep the old manual UTR deposit flow.</p>
+<label>Gateway base URL</label><input name="gw_base" value="{{ gs('gw_base') }}" placeholder="https://your-gateway.onrender.com">
+<label>Gateway API token / key</label><input name="gw_token" value="{{ gs('gw_token') }}" autocomplete="off">
+<label>Create-order path</label><input name="gw_create_path" value="{{ gs('gw_create_path') }}">
+<label>Check-order path</label><input name="gw_check_path" value="{{ gs('gw_check_path') }}">
+<label>Payment page name (shown to customer)</label><input name="pay_name" value="{{ gs('pay_name') }}">
+<label>Payment valid for (minutes)</label><input name="pay_expire" value="{{ gs('pay_expire') }}">
+<p class="mu">Webhook URL for your gateway (callback):<br><code>{{ webhook_url() }}</code><br>Status: <b class="{{ 'ok' if gw_on() else 'no' }}">{{ 'configured' if gw_on() else 'not configured' }}</b></p></div>
+<div class="card"><h3>Manual payments (UPI / Binance)</h3>
+<p class="mu">Customer pays, taps <b>I Have Paid</b>, sends the transaction ID, and YOU get a notification with Approve / Reject.</p>
+<label>Pay UPI button (needs the UPI ID in "Payment (deposits)")</label><select name="pay_upi_on"><option value="1" {{ 'selected' if gs('pay_upi_on')=='1' }}>ON</option><option value="0" {{ 'selected' if gs('pay_upi_on')!='1' }}>OFF</option></select>
+<label>Pay Binance button</label><select name="pay_binance_on"><option value="1" {{ 'selected' if gs('pay_binance_on')=='1' }}>ON</option><option value="0" {{ 'selected' if gs('pay_binance_on')!='1' }}>OFF</option></select>
+<label>Binance payment details shown to customer (Binance Pay ID / UID / wallet address + network). Empty = button hidden.</label>
+<textarea name="binance_text" rows="4">{{ gs('binance_text') }}</textarea></div>
 <div class="card"><h3>Links</h3><label>Tutorial video link (Watch Guide Video)</label><input name="tutorial_url" value="{{ gs('tutorial_url') }}" placeholder="https://youtube.com/...">
 <label>All Update File link</label><input name="update_url" value="{{ gs('update_url') }}" placeholder="https://t.me/... or drive link"></div>
 <button>Save settings</button></form>{% endblock %}"""
@@ -170,7 +192,11 @@ BROADCAST = """{% extends 'base.html' %}{% block body %}<h1>Broadcast</h1>
 <label>Send to</label><select name="to"><option value="me">Only me (test)</option><option value="all">All verified users</option></select>
 <button>Send</button></form>{% if last %}<p class="mu">Last broadcast: {{ last }}</p>{% endif %}</div>{% endblock %}"""
 
-app.jinja_loader = DictLoader({"backup.html": BACKUP, "broadcast.html": BROADCAST,"products.html": PRODUCTS, "product.html": PRODUCT, "plan.html": PLAN, "deposits.html": DEPOSITS, "orders.html": ORDERS,"base.html": BASE, "login.html": LOGIN, "home.html": HOME, "emojis.html": EMOJIS, "settings.html": SETTINGS, "users.html": USERS})
+PAYMENTS = '{% extends \'base.html\' %}{% block body %}<h1>QR / Manual Payments</h1>\n<p>{% for k,l in tabs %}<a class="lk" href="/payments?s={{ k }}" style="margin-right:12px;{{ \'font-weight:bold\' if k==s }}">{{ l }}</a>{% endfor %}</p>\n<div class="card tw"><table><tr><th>Order ID</th><th>User</th><th>Method</th><th>For</th><th>Amount</th><th>Txn ID</th><th>Proof</th><th>Status</th><th>Time</th><th></th></tr>\n{% for p in rows %}<tr><td>{{ p.pay_no }}</td><td>{{ p.user_id }}<br><span class="mu">{{ p.name }}</span></td><td>{{ p.method }}</td><td>{{ p.title }}</td><td>{{ p.symbol }}{{ \'%.2f\'|format(p.amount) }}</td><td>{{ p.txn or \'-\' }}</td>\n<td>{% if p.proof %}<a class="lk" target="_blank" href="/payproof/{{ p.pay_no }}">view</a>{% else %}-{% endif %}</td>\n<td><span class="bd {{ \'ok\' if p.status==\'paid\' else \'no\' if p.status in (\'cancelled\',\'rejected\') else \'wt\' }}">{{ p.status }}</span></td><td>{{ p.created|ts }}</td>\n<td>{% if p.status in (\'pending\',\'expired\',\'review\') %}<form method="post" action="/payments/{{ p.pay_no }}" class="row"><input type="hidden" name="csrf" value="{{ csrf() }}">\n<button name="a" value="ok" style="margin:0" onclick="return confirm(\'Mark as PAID and deliver to the user?\')">Approve</button><button name="a" value="no" class="red" style="margin:0">Reject</button></form>{% endif %}</td></tr>{% endfor %}</table></div>{% endblock %}'
+COUPONS = '{% extends \'base.html\' %}{% block body %}<h1>Coupons</h1>\n<div class="card"><h3>Create coupon</h3><p class="mu">A coupon gives a discount on one purchase. Each user can use a coupon once.</p>\n<form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="add">\n<label>Code (letters/numbers)</label><input name="code" required placeholder="RG50">\n<label>Type</label><select name="kind"><option value="percent">Percent off (%)</option><option value="flat">Flat off (INR)</option></select>\n<label>Value</label><input name="value" required placeholder="10">\n<label>Max total uses (0 = unlimited)</label><input name="max_uses" value="0">\n<label>Valid for days (0 = no expiry)</label><input name="days" value="0"><button>Create coupon</button></form></div>\n<div class="card tw"><table><tr><th>Code</th><th>Discount</th><th>Used</th><th>Expires</th><th>Status</th><th></th></tr>\n{% for c in rows %}<tr><td><b>{{ c.code }}</b></td><td>{{ (c.value|string + \'%\') if c.kind==\'percent\' else (\'₹\' + c.value|string) }}</td><td>{{ c.used }} / {{ c.max_uses or \'∞\' }}</td>\n<td>{{ c.expires|ts if c.expires else \'never\' }}</td><td>{{ \'Active\' if c.active else \'Off\' }}</td>\n<td><form method="post" class="row"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="code" value="{{ c.code }}">\n<button name="a" value="toggle" style="margin:0">{{ \'Turn off\' if c.active else \'Turn on\' }}</button><button name="a" value="del" class="red" style="margin:0" onclick="return confirm(\'Delete coupon?\')">Delete</button></form></td></tr>{% endfor %}</table></div>{% endblock %}'
+PAYPAGE = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">\n<title>{{ shop }} · Payment</title><style>\n*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,#1b2a4a 0,#0a0e17 55%);color:#eaf0ff;font-family:system-ui,Segoe UI,Roboto,sans-serif;display:flex;justify-content:center;padding:18px}\n.card{width:100%;max-width:410px;background:#111827;border:1px solid #223049;border-radius:20px;padding:22px;box-shadow:0 20px 60px #0008;align-self:flex-start;margin-top:10px}\n.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.shop{font-weight:700;font-size:16px}.sec{font-size:12px;color:#7ee0a0;background:#12301f;padding:4px 10px;border-radius:99px}\n.amt{text-align:center;margin:10px 0 4px;font-size:38px;font-weight:800}.sub{text-align:center;color:#8b96b3;font-size:13px;margin-bottom:14px}\n.qr{background:#fff;border-radius:16px;padding:14px;width:240px;height:240px;margin:0 auto;display:flex;align-items:center;justify-content:center}.qr svg{width:100%;height:100%}\n.row{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #1d2940;font-size:14px}.row span:first-child{color:#8b96b3}.row b{text-align:right;word-break:break-all}\n.btn{display:block;text-align:center;text-decoration:none;background:#3b82f6;color:#fff;padding:13px;border-radius:12px;font-weight:600;margin-top:16px}.btn.g{background:#16a34a}\n.wait{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:16px;color:#ffd166;font-size:14px}.dot{width:10px;height:10px;border-radius:50%;background:#ffd166;animation:p 1s infinite}@keyframes p{50%{opacity:.25}}\n.tm{text-align:center;color:#8b96b3;font-size:13px;margin-top:8px}.ok{width:84px;height:84px;border-radius:50%;background:#16a34a;margin:6px auto 14px;display:flex;align-items:center;justify-content:center;animation:pop .5s}\n@keyframes pop{0%{transform:scale(.3);opacity:0}100%{transform:scale(1);opacity:1}}.ok svg{width:46px;height:46px}.big{text-align:center;font-size:22px;font-weight:800}.bad{background:#dc2626}\n.mu{color:#8b96b3;font-size:12px;text-align:center;margin-top:14px}\n</style></head><body><div class="card">\n<div class="top"><div class="shop">{{ shop }}</div><div class="sec">🔒 Secure UPI</div></div>\n{% if p.status == \'paid\' %}\n<div class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg></div>\n<div class="big">Payment Successful</div><div class="sub">{{ sym }}{{ \'%.2f\'|format(p.amount) }} received</div>\n<div class="row"><span>Order ID</span><b>{{ p.pay_no }}</b></div>\n<div class="row"><span>Transaction ID</span><b>{{ p.txn or \'-\' }}</b></div>\n<div class="row"><span>{{ \'Wallet\' if p.kind==\'topup\' else \'Item\' }}</span><b>{{ \'Recharge added to wallet\' if p.kind==\'topup\' else p.title }}</b></div>\n<div class="row"><span>Paid on</span><b>{{ p.paid_at|ts }} IST</b></div>\n<div class="row"><span>Status</span><b style="color:#4ade80">SUCCESS</b></div>\n<p class="sub" style="margin-top:14px">{{ \'Your wallet balance is updated.\' if p.kind==\'topup\' else \'Your key has been sent in Telegram.\' }}</p>\n{% if bot_user %}<a class="btn g" href="https://t.me/{{ bot_user }}">Back to Telegram</a>{% endif %}\n{% elif p.status in (\'expired\',\'cancelled\') %}\n<div class="ok bad"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></div>\n<div class="big">Payment {{ \'Expired\' if p.status==\'expired\' else \'Cancelled\' }}</div><div class="sub">Order {{ p.pay_no }}<br>If you already paid, it will be added automatically.</div>\n{% if bot_user %}<a class="btn" href="https://t.me/{{ bot_user }}">Back to Telegram</a>{% endif %}\n{% else %}\n<div class="amt">{{ sym }}{{ \'%.2f\'|format(p.amount) }}</div><div class="sub">{{ p.title }}</div>\n<div class="qr">{{ qr|safe if qr else \'QR not available\' }}</div>\n<div class="tm">Expires in <b id="t">--:--</b></div>\n<div class="wait"><span class="dot"></span> Waiting for payment…</div>\n{% if p.upi_uri %}<a class="btn" href="{{ p.upi_uri }}">Pay with UPI App</a>{% elif p.pay_url %}<a class="btn" href="{{ p.pay_url }}">Open payment link</a>{% endif %}\n<div class="row" style="margin-top:14px"><span>Order ID</span><b>{{ p.pay_no }}</b></div>\n<p class="mu">Scan with PhonePe, Google Pay, Paytm or any UPI app.<br>Do not close this page — it updates automatically.</p>\n<script>var left={{ left }};function f(){var m=Math.floor(left/60),s=left%60;document.getElementById(\'t\').textContent=(m<10?\'0\':\'\')+m+\':\'+(s<10?\'0\':\'\')+s;if(left<=0){location.reload();return}left--}f();setInterval(f,1000);\nsetInterval(function(){fetch(\'status\').then(function(r){return r.json()}).then(function(j){if(j.status!==\'pending\')location.reload()}).catch(function(){})},3000);</script>\n{% endif %}\n</div></body></html>'
+
+app.jinja_loader = DictLoader({"payments.html": PAYMENTS, "coupons.html": COUPONS, "backup.html": BACKUP, "broadcast.html": BROADCAST,"products.html": PRODUCTS, "product.html": PRODUCT, "plan.html": PLAN, "deposits.html": DEPOSITS, "orders.html": ORDERS,"base.html": BASE, "login.html": LOGIN, "home.html": HOME, "emojis.html": EMOJIS, "settings.html": SETTINGS, "users.html": USERS})
 
 
 def csrf():
@@ -180,15 +206,22 @@ def csrf():
 
 
 IST = timezone(timedelta(hours=5, minutes=30))
-app.jinja_env.globals.update(csrf=csrf, gs=lambda k: db.get(k))
+def public_url():
+    return (bot.PUBLIC_URL or request.host_url.rstrip("/"))
+
+
+app.jinja_env.globals.update(csrf=csrf, gs=lambda k: db.get(k), gw_on=gateway.configured,
+                             webhook_url=lambda: public_url() + "/webhook/gateway?s=" + db.get("gw_secret"))
 app.jinja_env.filters["ts"] = lambda t: datetime.fromtimestamp(t or 0, IST).strftime("%d %b %H:%M")
 
 
 @app.before_request
 def guard():
+    if request.endpoint in ("health", "static", "pay_page", "pay_status", "gw_webhook"):
+        return
     if request.method == "POST" and not hmac.compare_digest(request.form.get("csrf", ""), session.get("csrf", "x")):
         return "Bad request", 400
-    if request.endpoint in ("login", "health", "static"):
+    if request.endpoint == "login":
         return
     if not session.get("ok"):
         return redirect(url_for("login"))
@@ -237,11 +270,11 @@ def logout():
 def home():
     day0 = int(datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
     with db.conn() as c:
-        s = {"users.html": c.execute("SELECT COUNT(*) FROM users").fetchone()[0],
+        s = {"users": c.execute("SELECT COUNT(*) FROM users").fetchone()[0],
              "ver": c.execute("SELECT COUNT(*) FROM users WHERE verified=1").fetchone()[0],
              "orders": c.execute("SELECT COUNT(*) FROM orders").fetchone()[0],
              "bal": c.execute("SELECT COALESCE(SUM(balance),0) FROM users").fetchone()[0],
-             "pend": c.execute("SELECT COUNT(*) FROM deposits WHERE status='review'").fetchone()[0],
+             "pend": c.execute("SELECT COUNT(*) FROM deposits WHERE status='review'").fetchone()[0] + c.execute("SELECT COUNT(*) FROM pay_orders WHERE status='review'").fetchone()[0],
              "stock": c.execute("SELECT COUNT(*) FROM keys WHERE used=0").fetchone()[0],
              "o_today": c.execute("SELECT COUNT(*) FROM orders WHERE created>=?", (day0,)).fetchone()[0],
              "u_today": c.execute("SELECT COUNT(*) FROM users WHERE joined>=?", (day0,)).fetchone()[0]}
@@ -258,12 +291,23 @@ def emojis():
                 if eid and not eid.isdigit():
                     continue
                 c.execute("UPDATE emojis SET eid=?, fallback=? WHERE k=?", (eid, request.form.get("fb_" + k, "").strip() or "▫️", k))
+        db.put("emoji_mode", "ok")
         db.emoji_clear()
-        flash("Saved")
+        with db.conn() as c:
+            ids = [r["eid"] for r in c.execute("SELECT eid FROM emojis WHERE eid<>''")]
+        bad = bot.emoji_invalid(ids)
+        flash("Saved" + (f" - but {len(bad)} ID(s) are not valid in Telegram: " + ", ".join(bad[:5]) if bad else ". Now press 'Test premium emoji now'."))
         return redirect("/emojis")
     with db.conn() as c:
         rows = c.execute("SELECT * FROM emojis ORDER BY rowid").fetchall()
     return page("emojis", rows=rows, tab="emojis")
+
+
+@app.route("/emojis/test", methods=["POST"])
+def emoji_test_route():
+    ok, rep = bot.emoji_test()
+    flash(("OK: " if ok else "PROBLEM: ") + rep)
+    return redirect("/emojis")
 
 
 @app.route("/emojis/clear/<k>")
@@ -284,6 +328,12 @@ def settings():
                     continue
                 if k == "low_stock" and not v.isdigit():
                     continue
+                if k == "pay_expire" and not (v.isdigit() and 1 <= int(v) <= 60):
+                    continue
+                if k == "gw_base":
+                    v = v.rstrip("/")
+                    if v and not v.startswith("http"):
+                        v = "https://" + v
                 if k == "ref_percent":
                     try:
                         if not 0 <= float(v) <= 100:
@@ -499,3 +549,112 @@ def orders_csv():
         for o in c.execute("SELECT * FROM orders ORDER BY id DESC"):
             w.writerow([o["order_no"], o["user_id"], o["product"], o["plan"], o["price"], o["key"], o["created"]])
     return Response(out.getvalue(), mimetype="text/csv", headers={"Content-Disposition": "attachment; filename=orders.csv"})
+
+
+# ------------------------------------------------------------------ Part 4: QR payment page, webhook, payments, coupons
+@app.route("/pay/<token>")
+def pay_page(token):
+    p = db.pay_by_token(token)
+    if not p:
+        return "Payment not found", 404
+    u = db.user(p["user_id"])
+    exp = int(db.get("pay_expire", "10") or 10) * 60
+    left = max(int(p["created"] + exp - time.time()), 0)
+    if p["status"] == "pending" and left <= 0:
+        db.pay_update(p["pay_no"], status="expired")
+        p = db.pay_get(p["pay_no"])
+    qr = ""
+    if p["status"] == "pending" and segno and (p["upi_uri"] or p["pay_url"]):
+        qr = segno.make(p["upi_uri"] or p["pay_url"], error="m").svg_inline(scale=6, border=1, dark="#000", light="#fff")
+    return render_template_string(PAYPAGE, p=p, qr=qr, left=left, shop=db.get("pay_name") or db.get("shop_name"),
+                                  sym=u["symbol"] if u else "₹", bot_user=bot.BOT_USERNAME["v"])
+
+
+@app.route("/pay/<token>/status")
+def pay_status(token):
+    p = db.pay_by_token(token)
+    return {"status": p["status"] if p else "none"}
+
+
+PAID_WORDS = gateway.PAID_WORDS
+
+
+@app.route("/webhook/gateway", methods=["GET", "POST"])
+def gw_webhook():
+    sec = db.get("gw_secret")
+    if not sec or not hmac.compare_digest(request.args.get("s", ""), sec):
+        return "forbidden", 403
+    data = {**request.args.to_dict(), **(request.get_json(silent=True) or {}), **request.form.to_dict()}
+    inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+    data = {**inner, **data}
+    no = next((str(data[k]) for k in ("order_id", "orderId", "client_order_id", "merchant_order_id", "client_txn_id") if data.get(k)), "")
+    p = db.pay_get(no) if no else None
+    if not p:
+        return "order not found", 404
+    st = str(data.get("status") or data.get("payment_status") or "").lower()
+    txn = str(data.get("utr") or data.get("txn_id") or data.get("transaction_id") or data.get("rrn") or "")
+    if st in PAID_WORDS:
+        threading.Thread(target=bot.complete_pay, args=(no, txn), daemon=True).start()
+    elif gateway.configured():
+        s2, t2 = gateway.check(no)
+        if s2 == "paid":
+            threading.Thread(target=bot.complete_pay, args=(no, t2 or txn), daemon=True).start()
+    return "ok"
+
+
+@app.route("/payments")
+def payments():
+    tabs = [("review", "To review"), ("pending", "Waiting"), ("paid", "Paid"), ("rejected", "Rejected"), ("expired", "Expired"), ("cancelled", "Cancelled"), ("all", "All")]
+    st = request.args.get("s", "review")
+    q = """SELECT p.*, u.name, u.symbol FROM pay_orders p LEFT JOIN users u ON u.id=p.user_id"""
+    with db.conn() as c:
+        rows = c.execute(q + (" WHERE p.status=?" if st != "all" else "") + " ORDER BY p.id DESC LIMIT 150",
+                         (st,) if st != "all" else ()).fetchall()
+    return page("payments", rows=rows, s=st, tabs=tabs, tab="payments")
+
+
+@app.route("/payments/<no>", methods=["POST"])
+def payment_action(no):
+    if request.form.get("a") == "ok":
+        pp = db.pay_get(no)
+        p = bot.complete_pay(no, (pp["txn"] if pp else "") or "ADMIN-" + time.strftime("%H%M%S"))
+        flash("Approved and delivered" if p else "Already handled")
+    else:
+        p = bot.reject_pay(no)
+        flash("Rejected, user informed" if p else "Already handled")
+    return redirect(request.referrer or "/payments")
+
+
+@app.route("/payproof/<no>")
+def payproof(no):
+    p = db.pay_get(no)
+    data = bot.fetch_file(p["proof"]) if p and p["proof"] else None
+    if not data:
+        return "No proof", 404
+    return Response(data, mimetype="image/jpeg")
+
+
+@app.route("/coupons", methods=["GET", "POST"])
+def coupons():
+    if request.method == "POST":
+        a, f = request.form.get("a"), request.form
+        code = "".join(ch for ch in f.get("code", "").upper() if ch.isalnum())[:32]
+        with db.conn() as c:
+            if a == "add" and code:
+                kind = "flat" if f.get("kind") == "flat" else "percent"
+                val = num(f.get("value"))
+                if val <= 0 or (kind == "percent" and val > 100):
+                    flash("Invalid value")
+                else:
+                    days = int(num(f.get("days")))
+                    c.execute("INSERT OR REPLACE INTO coupons(code,kind,value,max_uses,used,expires,active,created) VALUES(?,?,?,?,COALESCE((SELECT used FROM coupons WHERE code=?),0),?,1,?)",
+                              (code, kind, val, int(num(f.get("max_uses"))), code, int(time.time()) + days * 86400 if days else 0, int(time.time())))
+                    flash("Coupon saved")
+            elif a == "toggle" and code:
+                c.execute("UPDATE coupons SET active=1-active WHERE code=?", (code,))
+            elif a == "del" and code:
+                c.execute("DELETE FROM coupons WHERE code=?", (code,))
+        return redirect("/coupons")
+    with db.conn() as c:
+        rows = c.execute("SELECT * FROM coupons ORDER BY created DESC").fetchall()
+    return page("coupons", rows=rows, tab="coupons")
