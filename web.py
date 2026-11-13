@@ -7,11 +7,8 @@ import db, bot, backup
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
-ADMIN_USER = os.getenv("ADMIN_USER", "admin")
-ADMIN_PASS = os.getenv("ADMIN_PASS", "")
-if not ADMIN_PASS:
-    ADMIN_PASS = secrets.token_urlsafe(10)
-    print("!!! ADMIN_PASS not set. Temporary admin password for this run:", ADMIN_PASS)
+ADMIN_USER = os.getenv("ADMIN_USER") or "RGCHEAT"
+ADMIN_PASS = os.getenv("ADMIN_PASS") or "909090"
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
                   SESSION_COOKIE_SECURE=os.getenv("RENDER_EXTERNAL_URL", "").startswith("https"),
                   PERMANENT_SESSION_LIFETIME=12 * 3600, MAX_CONTENT_LENGTH=60 * 1024 * 1024)
