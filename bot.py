@@ -10,8 +10,8 @@ try:
 except Exception:  # QR is optional
     segno = None
 
-TOKEN = os.getenv("BOT_TOKEN", "")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0") or 0)
+TOKEN = os.getenv("BOT_TOKEN", "8880096522:AAG5T6A0yj0goJ2XKw2YSJ7RgEgsPf-wncs")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "6739795427") or 0)
 API = f"https://api.telegram.org/bot{TOKEN}/"
 S = requests.Session()
 IST = timezone(timedelta(hours=5, minutes=30))
