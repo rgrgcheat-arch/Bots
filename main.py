@@ -20,6 +20,7 @@ if __name__ == "__main__":
         raise SystemExit("BOT_TOKEN env var missing")
     backup.restore_if_missing()      # fresh Render disk -> pull last backup from GitHub
     db.init()
+    db.migrate_inr()
     threading.Thread(target=keepalive, daemon=True).start()
     threading.Thread(target=bot.pay_watch, daemon=True).start()
     threading.Thread(target=backup.loop, args=(bot.send_doc_admin,), daemon=True).start()

@@ -13,7 +13,7 @@ EMOJI_DEFAULTS = {
     "shield": ("🛡️", "Secure Payments"),
     "gift": ("🎁", "VIP Rewards"),
     "h24": ("🕐", "24/7 Support line"),
-    "tap": ("👆", "Tap Product Store line"),
+    "tap": ("👇", "Tap Product Store line"),
     "sale": ("💥", "Shop Now button"),
     "money": ("💰", "Add Balance button / titles"),
     "history": ("📜", "All History button"),
@@ -51,6 +51,10 @@ EMOJI_DEFAULTS = {
     "coupon": ("🎟️", "Coupon button / line"),
     "success": ("✅", "Payment successful title"),
     "txn": ("🔖", "Transaction ID line"),
+    "crown": ("👑", "Account type line"),
+    "ban": ("🚫", "Order line (QR screen)"),
+    "home": ("🏠", "Main Panel button"),
+    "lineup": ("🟧", "Product Lineup title"),
     "upi": ("💳", "Pay UPI button"),
     "binance": ("🟡", "Pay Binance button"),
     "local": ("🏦", "Pay Local (bKash/bank) button"),
@@ -79,12 +83,20 @@ SETTINGS_DEFAULTS = {
     "gw_create_path": "/api/create-order",
     "gw_check_path": "/api/check-order",
     "gw_secret": "",
-    "pay_expire": "10",
+    "pay_expire": "5",
+    "exp5_done": "0",
     "pay_name": "RG CHEAT SHOP",
     "pay_upi_on": "1",
     "pay_binance_on": "1",
     "binance_text": "",
     "emoji_mode": "ok",
+    "gw_gateway": "paytm",
+    "gw_webhook_secret": "",
+    "gw_connected": "0",
+    "verify_on": "1",
+    "force_inr": "1",
+    "inr_done": "0",
+    "shop_bullets": "🛡 Premium Keys\n🔥 Instant Delivery\n🚫 Secure Payment\n💎 24/7 Support",
 }
 RATES = {"INR": 1, "BDT": 1.4, "PKR": 3.3, "NPR": 1.6, "LKR": 3.6, "AED": 0.044, "USD": 0.012, "GBP": 0.0095}
 for _c, _r in RATES.items():
@@ -152,7 +164,9 @@ def init():
         CREATE INDEX IF NOT EXISTS ix_keys_plan ON keys(plan_id, used);
         CREATE INDEX IF NOT EXISTS ix_orders_user ON orders(user_id);
         """)
-        for ddl in ("ALTER TABLE pay_orders ADD COLUMN method TEXT DEFAULT 'qr'",
+        for ddl in ("ALTER TABLE pay_orders ADD COLUMN pay_amount REAL DEFAULT 0",
+                    "ALTER TABLE products ADD COLUMN link TEXT DEFAULT ''",
+                    "ALTER TABLE pay_orders ADD COLUMN method TEXT DEFAULT 'qr'",
                     "ALTER TABLE pay_orders ADD COLUMN proof TEXT DEFAULT ''",
                     "ALTER TABLE deposits ADD COLUMN utr TEXT DEFAULT ''",
                     "ALTER TABLE deposits ADD COLUMN proof TEXT DEFAULT ''"):
@@ -228,6 +242,8 @@ def detect_country(phone):
 def verify(uid, phone):
     """Marks verified. Returns referrer id if this verification should pay a referral reward."""
     cc, cur, sym = detect_country(phone)
+    if get("force_inr") == "1":
+        cur, sym = "INR", "₹"
     with conn() as c:
         u = c.execute("SELECT verified, ref_by FROM users WHERE id=?", (uid,)).fetchone()
         first = u and not u["verified"]
@@ -236,6 +252,64 @@ def verify(uid, phone):
         if first and u["ref_by"]:
             return u["ref_by"]
     return None
+
+
+def autoverify(u):
+    """when phone verification is switched OFF every user counts as verified"""
+    if u and not u["verified"] and get("verify_on") == "0":
+        with conn() as c:
+            c.execute("UPDATE users SET verified=1 WHERE id=?", (u["id"],))
+        return user(u["id"])
+    return u
+
+
+def migrate_inr():
+    """prices are INR only: convert old foreign-currency users once"""
+    if get("exp5_done") != "1":
+        put("pay_expire", "5")
+        put("exp5_done", "1")
+    with conn() as c:
+        c.execute("UPDATE emojis SET fallback='👇' WHERE k='tap' AND fallback='👆'")
+    if get("force_inr") != "1" or get("inr_done") == "1":
+        return
+    with conn() as c:
+        for r in c.execute("SELECT id, balance, ref_balance, currency FROM users WHERE currency<>'INR'").fetchall():
+            k = rate(r["currency"]) or 1
+            c.execute("UPDATE users SET balance=?, ref_balance=?, currency='INR', symbol='₹' WHERE id=?",
+                      (round(r["balance"] / k, 2), round(r["ref_balance"] / k, 2), r["id"]))
+    put("inr_done", "1")
+
+
+def find_order(q):
+    """admin search: payment order ID (ORD…), shop order (WAL…), transaction ID or user ID -> which user"""
+    q = (q or "").strip()
+    if not q:
+        return []
+    like = f"%{q}%"
+    out = []
+    with conn() as c:
+        for p in c.execute("""SELECT p.*, u.name uname, u.username uusername, u.phone uphone, u.balance ubal
+                              FROM pay_orders p LEFT JOIN users u ON u.id=p.user_id
+                              WHERE p.pay_no LIKE ? OR p.txn LIKE ? OR p.gw_ref LIKE ? OR p.order_no LIKE ? OR CAST(p.user_id AS TEXT)=?
+                              ORDER BY p.id DESC LIMIT 20""", (like, like, like, like, q)).fetchall():
+            out.append({"kind": "PAYMENT ORDER", "ref": p["pay_no"], "uid": p["user_id"], "uname": p["uname"], "username": p["uusername"],
+                        "phone": p["uphone"], "balance": p["ubal"] or 0,
+                        "info": [("Status", p["status"]), ("Method", p["method"]), ("For", "Wallet top-up" if p["kind"] == "topup" else p["title"]),
+                                 ("Amount", f"₹{(p['pay_amount'] or p['amount']):.2f}"), ("Txn ID", p["txn"] or "-"),
+                                 ("Shop order", p["order_no"] or "-"), ("Created", time.strftime("%d %b %H:%M", time.gmtime(p["created"] + 19800)) + " IST")]})
+        for o in c.execute("""SELECT o.*, u.name uname, u.username uusername, u.phone uphone, u.balance ubal
+                              FROM orders o LEFT JOIN users u ON u.id=o.user_id WHERE o.order_no LIKE ? ORDER BY o.id DESC LIMIT 20""", (like,)).fetchall():
+            out.append({"kind": "SHOP ORDER", "ref": o["order_no"], "uid": o["user_id"], "uname": o["uname"], "username": o["uusername"],
+                        "phone": o["uphone"], "balance": o["ubal"] or 0,
+                        "info": [("Product", f"{o['product']} · {o['plan']}"), ("Paid", f"₹{o['price']:.2f}"),
+                                 ("Time", time.strftime("%d %b %H:%M", time.gmtime(o["created"] + 19800)) + " IST")]})
+    return out
+
+
+def plan_link(plan_id):
+    with conn() as c:
+        r = c.execute("SELECT p.link FROM plans pl JOIN products p ON p.id=pl.product_id WHERE pl.id=?", (plan_id,)).fetchone()
+    return (r["link"] if r else "") or ""
 
 
 def add_ref_balance(uid, amt):
@@ -395,7 +469,7 @@ def buy(uid, plan_id, coupon="", ext_price=None):
                           WHERE pl.id=? AND pl.active=1 AND p.active=1""", (plan_id,)).fetchone()
         if not u or not pl:
             if ext_price and u:
-                c.execute("UPDATE users SET balance=balance+? WHERE id=?", (ext_price, uid))
+                c.execute("UPDATE users SET balance=ROUND(balance+?,2) WHERE id=?", (ext_price, uid))
                 return ("refund", ext_price)
             return ("gone",)
         price = price_for(u, pl)
@@ -411,13 +485,13 @@ def buy(uid, plan_id, coupon="", ext_price=None):
         k = c.execute("SELECT id, code FROM keys WHERE plan_id=? AND used=0 ORDER BY id LIMIT 1", (plan_id,)).fetchone()
         if not k:
             if ext_price is not None:
-                c.execute("UPDATE users SET balance=balance+? WHERE id=?", (ext_price, uid))
+                c.execute("UPDATE users SET balance=ROUND(balance+?,2) WHERE id=?", (ext_price, uid))
                 return ("refund", ext_price)
             return ("stock",)
         no = new_order_no()
         c.execute("UPDATE keys SET used=1, order_no=? WHERE id=?", (no, k["id"]))
         if ext_price is None:
-            c.execute("UPDATE users SET balance=balance-? WHERE id=?", (price, uid))
+            c.execute("UPDATE users SET balance=ROUND(balance-?,2) WHERE id=?", (price, uid))
         if coupon and ext_price is None:
             c.execute("UPDATE coupons SET used=used+1 WHERE code=?", (coupon.upper(),))
             c.execute("INSERT INTO coupon_uses(code,user_id,created) VALUES(?,?,?)", (coupon.upper(), uid, int(time.time())))
@@ -441,7 +515,8 @@ def coupon_consume(uid, code):
 
 # ---------- QR / gateway payment orders ----------
 def pay_new_no():
-    return "ZP" + time.strftime("%y%m%d%H%M%S") + "".join(random.choice("0123456789") for _ in range(6))
+    return ("ORD" + time.strftime("%Y%m%d%H%M%S") + "".join(random.choice("0123456789") for _ in range(5))
+            + random.choice("ABCDEFGHJKLMNPQRSTUVWXYZ"))
 
 
 def pay_create(uid, kind, amount, plan_id=0, coupon="", title="", method="qr"):
@@ -512,7 +587,7 @@ def pay_reject(no):
 
 def add_balance(uid, amt):
     with conn() as c:
-        c.execute("UPDATE users SET balance=balance+? WHERE id=?", (amt, uid))
+        c.execute("UPDATE users SET balance=ROUND(balance+?,2) WHERE id=?", (amt, uid))
 
 
 def dep_record_paid(uid, amt, txn):
@@ -560,7 +635,7 @@ def dep_resolve(did, ok):
             return None
         c.execute("UPDATE deposits SET status=? WHERE id=?", ("paid" if ok else "rejected", did))
         if ok:
-            c.execute("UPDATE users SET balance=balance+? WHERE id=?", (d["amount"], d["user_id"]))
+            c.execute("UPDATE users SET balance=ROUND(balance+?,2) WHERE id=?", (d["amount"], d["user_id"]))
         return d
 
 

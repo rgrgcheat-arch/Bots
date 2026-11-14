@@ -3,6 +3,7 @@ from flask import Flask, request, session, redirect, url_for, render_template_st
 from datetime import datetime, timezone, timedelta
 from jinja2 import DictLoader
 import io, csv, threading
+import json
 import db, bot, backup, gateway
 try:
     import segno
@@ -51,7 +52,7 @@ td,th{padding:8px;border-bottom:1px solid var(--line);text-align:left;vertical-a
 </style></head><body>
 {% if session.get('ok') %}<nav>
 <a href="/" class="{{ 'on' if tab=='home' }}">Dashboard</a><a href="/emojis" class="{{ 'on' if tab=='emojis' }}">Premium Emoji</a>
-<a href="/products" class="{{ 'on' if tab=='products' }}">Products</a><a href="/deposits" class="{{ 'on' if tab=='deposits' }}">Deposits</a><a href="/payments" class="{{ 'on' if tab=='payments' }}">QR Payments</a><a href="/coupons" class="{{ 'on' if tab=='coupons' }}">Coupons</a>
+<a href="/products" class="{{ 'on' if tab=='products' }}">Products</a><a href="/deposits" class="{{ 'on' if tab=='deposits' }}">Deposits</a><a href="/payments" class="{{ 'on' if tab=='payments' }}">QR Payments</a><a href="/find" class="{{ 'on' if tab=='find' }}">Find Order</a><a href="/coupons" class="{{ 'on' if tab=='coupons' }}">Coupons</a>
 <a href="/orders" class="{{ 'on' if tab=='orders' }}">Orders</a><a href="/users" class="{{ 'on' if tab=='users' }}">Users</a>
 <a href="/broadcast" class="{{ 'on' if tab=='broadcast' }}">Broadcast</a><a href="/backup" class="{{ 'on' if tab=='backup' }}">Backup</a>
 <a href="/settings" class="{{ 'on' if tab=='settings' }}">Settings</a>
@@ -103,15 +104,20 @@ SETTINGS = """{% extends 'base.html' %}{% block body %}<h1>Settings</h1><form me
 <label>Telegram username or link</label><input name="support_tg" value="{{ gs('support_tg') }}" placeholder="@username">
 <label>WhatsApp support</label><select name="support_wa_on"><option value="1" {{ 'selected' if gs('support_wa_on')=='1' }}>ON</option><option value="0" {{ 'selected' if gs('support_wa_on')!='1' }}>OFF</option></select>
 <label>WhatsApp number (with country code)</label><input name="support_wa" value="{{ gs('support_wa') }}" placeholder="919XXXXXXXXX"></div>
-<div class="card"><h3>QR Payment Gateway (auto payment detect)</h3>
-<p class="mu">Used by <b>Pay QR</b> and <b>Add Balance</b> for India (INR) users. Leave empty to keep the old manual UTR deposit flow.</p>
-<label>Gateway base URL</label><input name="gw_base" value="{{ gs('gw_base') }}" placeholder="https://your-gateway.onrender.com">
-<label>Gateway API token / key</label><input name="gw_token" value="{{ gs('gw_token') }}" autocomplete="off">
-<label>Create-order path</label><input name="gw_create_path" value="{{ gs('gw_create_path') }}">
-<label>Check-order path</label><input name="gw_check_path" value="{{ gs('gw_check_path') }}">
+<div class="card"><h3>Payment Gateway (UPI QR, automatic)</h3>
+<p class="mu">Choose the gateway, paste the <b>API token</b> and press <b>Save &amp; Connect</b>. QR is created, payment is detected automatically and the key is delivered / wallet is credited.</p>
+<label>Gateway</label><select name="gw_gateway"><option value="paytm" {{ 'selected' if gs('gw_gateway')!='fampay' }}>Paytm</option><option value="fampay" {{ 'selected' if gs('gw_gateway')=='fampay' }}>FamPay</option></select>
+<label>API token</label><input name="gw_token" value="{{ gs('gw_token') }}" autocomplete="off" placeholder="paste API key from your gateway">
+<label>Gateway Base URL (change this when you move your gateway)</label><input name="gw_base" value="{{ gs('gw_base') or 'https://paymentgateway-0km8.onrender.com' }}">
+<label>Webhook signing secret (optional - from gateway dashboard &rarr; Webhooks)</label><input name="gw_webhook_secret" value="{{ gs('gw_webhook_secret') }}" autocomplete="off">
 <label>Payment page name (shown to customer)</label><input name="pay_name" value="{{ gs('pay_name') }}">
 <label>Payment valid for (minutes)</label><input name="pay_expire" value="{{ gs('pay_expire') }}">
-<p class="mu">Webhook URL for your gateway (callback):<br><code>{{ webhook_url() }}</code><br>Status: <b class="{{ 'ok' if gw_on() else 'no' }}">{{ 'configured' if gw_on() else 'not configured' }}</b></p></div>
+<button type="submit" formaction="/gateway/connect">Save &amp; Connect</button>
+<p class="mu">Status: <b class="{{ 'ok' if gs('gw_connected')=='1' else 'no' }}">{{ 'Connected' if gs('gw_connected')=='1' else ('Token saved - press Save & Connect' if gw_on() else 'Not connected') }}</b><br>
+Webhook URL to set in your gateway: <code>{{ webhook_url() }}</code></p></div>
+<div class="card"><h3>Store screen &amp; sign-up</h3>
+<label>Phone number verification at /start</label><select name="verify_on"><option value="1" {{ 'selected' if gs('verify_on')!='0' }}>ON (ask phone number)</option><option value="0" {{ 'selected' if gs('verify_on')=='0' }}>OFF (no phone needed)</option></select>
+<label>Shop screen lines (one per line, shown under "Product Lineup")</label><textarea name="shop_bullets" rows="5">{{ gs('shop_bullets') }}</textarea></div>
 <div class="card"><h3>Manual payments (UPI / Binance)</h3>
 <p class="mu">Customer pays, taps <b>I Have Paid</b>, sends the transaction ID, and YOU get a notification with Approve / Reject.</p>
 <label>Pay UPI button (needs the UPI ID in "Payment (deposits)")</label><select name="pay_upi_on"><option value="1" {{ 'selected' if gs('pay_upi_on')=='1' }}>ON</option><option value="0" {{ 'selected' if gs('pay_upi_on')!='1' }}>OFF</option></select>
@@ -123,7 +129,7 @@ SETTINGS = """{% extends 'base.html' %}{% block body %}<h1>Settings</h1><form me
 <button>Save settings</button></form>{% endblock %}"""
 
 USERS = """{% extends 'base.html' %}{% block body %}<h1>Users</h1><form class="row" method="get"><input name="q" value="{{ q }}" placeholder="Search ID / name / phone"><button style="margin:0">Search</button></form><br>
-<div class="card tw"><table><tr><th>ID</th><th>Name</th><th>Phone</th><th>Balance</th><th>Role</th><th>Actions</th></tr>
+<div class="card tw"><table><tr><th>ID</th><th>Name</th><th>Phone</th><th>Balance</th><th>Account type</th><th>Actions</th></tr>
 {% for u in rows %}<tr><td>{{ u.id }}</td><td>{{ u.name }}</td><td>{{ u.phone or '-' }}</td><td>{{ u.symbol }}{{ '%.2f'|format(u.balance) }}</td>
 <td>{{ u.role }}{{ ' (banned)' if u.banned }}</td><td><form method="post" action="/users/{{ u.id }}" class="row"><input type="hidden" name="csrf" value="{{ csrf() }}">
 <input name="amt" placeholder="+100 / -50" style="width:90px;flex:none"><button name="a" value="bal" style="margin:0">Balance</button>
@@ -131,8 +137,7 @@ USERS = """{% extends 'base.html' %}{% block body %}<h1>Users</h1><form class="r
 <button name="a" value="ban" class="red" style="margin:0">{{ 'Unban' if u.banned else 'Ban' }}</button></form></td></tr>{% endfor %}</table></div>{% endblock %}"""
 
 PRODUCTS = """{% extends 'base.html' %}{% block body %}<h1>Products</h1>
-<div class="card"><h3>Add product</h3><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="add">
-<label>Name</label><input name="name" required><label>Description (optional)</label><input name="descr"><button>Add product</button></form></div>
+<p><a class="lk" href="/products/new"><button type="button">+ Add product</button></a></p>
 <div class="card tw"><table><tr><th>Name</th><th>Plans</th><th>Stock</th><th>Status</th><th></th></tr>
 {% for p in rows %}<tr><td><a class="lk" href="/products/{{ p.id }}">{{ p.name }}</a></td><td>{{ p.nplans }}</td><td>{{ p.stock }}</td>
 <td>{{ 'Visible' if p.active else 'Hidden' }}</td><td><a class="lk" href="/products/{{ p.id }}">Open</a></td></tr>{% endfor %}</table></div>{% endblock %}"""
@@ -140,19 +145,23 @@ PRODUCTS = """{% extends 'base.html' %}{% block body %}<h1>Products</h1>
 PRODUCT = """{% extends 'base.html' %}{% block body %}<h1>{{ p.name }}</h1>
 <div class="card"><h3>Product</h3><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="edit">
 <label>Name</label><input name="name" value="{{ p.name }}"><label>Description</label><input name="descr" value="{{ p.descr }}">
+<label>Update group link (Join Telegram button after purchase)</label><input name="link" value="{{ p.link or '' }}" placeholder="https://t.me/yourgroup">
 <label>Sort order (small = first)</label><input name="sort" value="{{ p.sort }}">
 <label>Visibility</label><select name="active"><option value="1" {{ 'selected' if p.active }}>Visible</option><option value="0" {{ 'selected' if not p.active }}>Hidden</option></select>
 <button>Save</button></form>
 <form method="post" onsubmit="return confirm('Delete this product, its plans and unsold keys?')"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="del"><button class="red">Delete product</button></form></div>
-<div class="card tw"><h3>Plans (prices in INR)</h3><table><tr><th>Plan name</th><th>Price</th><th>Reseller price</th><th>Show</th><th>Stock / Sold</th><th></th></tr>
+<div class="card tw"><h3>Plans (prices in INR)</h3><table><tr><th>Duration</th><th>User price</th><th>Reseller price</th><th>Show</th><th>Stock / Sold</th><th></th></tr>
 {% for pl in plans %}<tr><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="plan_id" value="{{ pl.id }}">
-<td><input name="name" value="{{ pl.name }}"></td><td><input name="price" value="{{ pl.price }}" style="width:80px"></td><td><input name="rprice" value="{{ pl.rprice }}" style="width:80px"></td>
+<td>{% set pp_ = pl.name|pp %}{% if pp_ %}<input name="dur" value="{{ pp_[0] }}" style="width:70px"> <select name="unit" style="width:90px"><option value="hours" {{ 'selected' if pp_[1]=='hours' }}>Hours</option><option value="days" {{ 'selected' if pp_[1]=='days' }}>Days</option></select>{% else %}<input name="name" value="{{ pl.name }}">{% endif %}</td><td><input name="price" value="{{ pl.price }}" style="width:80px"></td><td><input name="rprice" value="{{ pl.rprice }}" style="width:80px"></td>
 <td><select name="active"><option value="1" {{ 'selected' if pl.active }}>Yes</option><option value="0" {{ 'selected' if not pl.active }}>No</option></select></td>
 <td>{{ pl.stock }} / {{ pl.sold }}<br><a class="lk" href="/plans/{{ pl.id }}">Manage keys</a></td>
 <td><button name="a" value="saveplan" style="margin:0">Save</button> <button name="a" value="delplan" class="red" style="margin:0" onclick="return confirm('Delete plan and unsold keys?')">X</button></td></form></tr>{% endfor %}</table></div>
-<div class="card"><h3>Add plan</h3><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="addplan">
-<label>Plan name (e.g. 30 Days)</label><input name="name" required><label>Price (INR)</label><input name="price" required><label>Reseller price (INR, 0 = same as price)</label><input name="rprice" value="0">
-<button>Add plan</button></form></div>{% endblock %}"""
+<div class="card"><h3>Add plans</h3><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="addplans">
+<div id="rows"></div><button type="button" onclick="addRow()" style="margin:6px 0">+ Add another plan</button>
+<script>function addRow(){var d=document.createElement('div');d.className='row';d.style.cssText='flex-wrap:wrap;gap:6px;margin:8px 0';
+d.innerHTML='<input name="dur" type="number" min="1" step="1" placeholder="Duration" style="width:95px;flex:none" required><select name="unit" style="width:95px;flex:none"><option value="hours">Hours</option><option value="days" selected>Days</option></select><input name="uprice" placeholder="User price" style="width:110px;flex:none" required><input name="rprice" placeholder="Reseller price" style="width:125px;flex:none"><button type="button" class="red" style="margin:0" onclick="this.parentNode.remove()">X</button>';
+document.getElementById('rows').appendChild(d)}addRow();</script>
+<button>Save plans</button></form></div>{% endblock %}"""
 
 PLAN = """{% extends 'base.html' %}{% block body %}<h1>{{ pl.pname }} · {{ pl.name }}</h1>
 <p class="mu"><a class="lk" href="/products/{{ pl.product_id }}">← back to product</a> · In stock: <b>{{ pl.stock }}</b></p>
@@ -192,11 +201,13 @@ BROADCAST = """{% extends 'base.html' %}{% block body %}<h1>Broadcast</h1>
 <label>Send to</label><select name="to"><option value="me">Only me (test)</option><option value="all">All verified users</option></select>
 <button>Send</button></form>{% if last %}<p class="mu">Last broadcast: {{ last }}</p>{% endif %}</div>{% endblock %}"""
 
-PAYMENTS = '{% extends \'base.html\' %}{% block body %}<h1>QR / Manual Payments</h1>\n<p>{% for k,l in tabs %}<a class="lk" href="/payments?s={{ k }}" style="margin-right:12px;{{ \'font-weight:bold\' if k==s }}">{{ l }}</a>{% endfor %}</p>\n<div class="card tw"><table><tr><th>Order ID</th><th>User</th><th>Method</th><th>For</th><th>Amount</th><th>Txn ID</th><th>Proof</th><th>Status</th><th>Time</th><th></th></tr>\n{% for p in rows %}<tr><td>{{ p.pay_no }}</td><td>{{ p.user_id }}<br><span class="mu">{{ p.name }}</span></td><td>{{ p.method }}</td><td>{{ p.title }}</td><td>{{ p.symbol }}{{ \'%.2f\'|format(p.amount) }}</td><td>{{ p.txn or \'-\' }}</td>\n<td>{% if p.proof %}<a class="lk" target="_blank" href="/payproof/{{ p.pay_no }}">view</a>{% else %}-{% endif %}</td>\n<td><span class="bd {{ \'ok\' if p.status==\'paid\' else \'no\' if p.status in (\'cancelled\',\'rejected\') else \'wt\' }}">{{ p.status }}</span></td><td>{{ p.created|ts }}</td>\n<td>{% if p.status in (\'pending\',\'expired\',\'review\') %}<form method="post" action="/payments/{{ p.pay_no }}" class="row"><input type="hidden" name="csrf" value="{{ csrf() }}">\n<button name="a" value="ok" style="margin:0" onclick="return confirm(\'Mark as PAID and deliver to the user?\')">Approve</button><button name="a" value="no" class="red" style="margin:0">Reject</button></form>{% endif %}</td></tr>{% endfor %}</table></div>{% endblock %}'
+PAYMENTS = '{% extends \'base.html\' %}{% block body %}<h1>QR / Manual Payments</h1><form class="row" method="get" action="/payments"><input name="q" value="{{ qs }}" placeholder="Search order ID / txn ID / user ID / name"><button style="margin:0">Search</button></form><br>\n<p>{% for k,l in tabs %}<a class="lk" href="/payments?s={{ k }}" style="margin-right:12px;{{ \'font-weight:bold\' if k==s }}">{{ l }}</a>{% endfor %}</p>\n<div class="card tw"><table><tr><th>Order ID</th><th>User</th><th>Method</th><th>For</th><th>Amount</th><th>Txn ID</th><th>Proof</th><th>Status</th><th>Time</th><th></th></tr>\n{% for p in rows %}<tr><td>{{ p.pay_no }}</td><td>{{ p.user_id }}<br><span class="mu">{{ p.name }}</span></td><td>{{ p.method }}</td><td>{{ p.title }}</td><td>{{ p.symbol }}{{ \'%.2f\'|format(p.amount) }}</td><td>{{ p.txn or \'-\' }}</td>\n<td>{% if p.proof %}<a class="lk" target="_blank" href="/payproof/{{ p.pay_no }}">view</a>{% else %}-{% endif %}</td>\n<td><span class="bd {{ \'ok\' if p.status==\'paid\' else \'no\' if p.status in (\'cancelled\',\'rejected\') else \'wt\' }}">{{ p.status }}</span></td><td>{{ p.created|ts }}</td>\n<td>{% if p.status in (\'pending\',\'expired\',\'review\') %}<form method="post" action="/payments/{{ p.pay_no }}" class="row"><input type="hidden" name="csrf" value="{{ csrf() }}">\n<button name="a" value="ok" style="margin:0" onclick="return confirm(\'Mark as PAID and deliver to the user?\')">Approve</button><button name="a" value="no" class="red" style="margin:0">Reject</button></form>{% endif %}</td></tr>{% endfor %}</table></div>{% endblock %}'
 COUPONS = '{% extends \'base.html\' %}{% block body %}<h1>Coupons</h1>\n<div class="card"><h3>Create coupon</h3><p class="mu">A coupon gives a discount on one purchase. Each user can use a coupon once.</p>\n<form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="add">\n<label>Code (letters/numbers)</label><input name="code" required placeholder="RG50">\n<label>Type</label><select name="kind"><option value="percent">Percent off (%)</option><option value="flat">Flat off (INR)</option></select>\n<label>Value</label><input name="value" required placeholder="10">\n<label>Max total uses (0 = unlimited)</label><input name="max_uses" value="0">\n<label>Valid for days (0 = no expiry)</label><input name="days" value="0"><button>Create coupon</button></form></div>\n<div class="card tw"><table><tr><th>Code</th><th>Discount</th><th>Used</th><th>Expires</th><th>Status</th><th></th></tr>\n{% for c in rows %}<tr><td><b>{{ c.code }}</b></td><td>{{ (c.value|string + \'%\') if c.kind==\'percent\' else (\'₹\' + c.value|string) }}</td><td>{{ c.used }} / {{ c.max_uses or \'∞\' }}</td>\n<td>{{ c.expires|ts if c.expires else \'never\' }}</td><td>{{ \'Active\' if c.active else \'Off\' }}</td>\n<td><form method="post" class="row"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="code" value="{{ c.code }}">\n<button name="a" value="toggle" style="margin:0">{{ \'Turn off\' if c.active else \'Turn on\' }}</button><button name="a" value="del" class="red" style="margin:0" onclick="return confirm(\'Delete coupon?\')">Delete</button></form></td></tr>{% endfor %}</table></div>{% endblock %}'
-PAYPAGE = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">\n<title>{{ shop }} · Payment</title><style>\n*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,#1b2a4a 0,#0a0e17 55%);color:#eaf0ff;font-family:system-ui,Segoe UI,Roboto,sans-serif;display:flex;justify-content:center;padding:18px}\n.card{width:100%;max-width:410px;background:#111827;border:1px solid #223049;border-radius:20px;padding:22px;box-shadow:0 20px 60px #0008;align-self:flex-start;margin-top:10px}\n.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.shop{font-weight:700;font-size:16px}.sec{font-size:12px;color:#7ee0a0;background:#12301f;padding:4px 10px;border-radius:99px}\n.amt{text-align:center;margin:10px 0 4px;font-size:38px;font-weight:800}.sub{text-align:center;color:#8b96b3;font-size:13px;margin-bottom:14px}\n.qr{background:#fff;border-radius:16px;padding:14px;width:240px;height:240px;margin:0 auto;display:flex;align-items:center;justify-content:center}.qr svg{width:100%;height:100%}\n.row{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #1d2940;font-size:14px}.row span:first-child{color:#8b96b3}.row b{text-align:right;word-break:break-all}\n.btn{display:block;text-align:center;text-decoration:none;background:#3b82f6;color:#fff;padding:13px;border-radius:12px;font-weight:600;margin-top:16px}.btn.g{background:#16a34a}\n.wait{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:16px;color:#ffd166;font-size:14px}.dot{width:10px;height:10px;border-radius:50%;background:#ffd166;animation:p 1s infinite}@keyframes p{50%{opacity:.25}}\n.tm{text-align:center;color:#8b96b3;font-size:13px;margin-top:8px}.ok{width:84px;height:84px;border-radius:50%;background:#16a34a;margin:6px auto 14px;display:flex;align-items:center;justify-content:center;animation:pop .5s}\n@keyframes pop{0%{transform:scale(.3);opacity:0}100%{transform:scale(1);opacity:1}}.ok svg{width:46px;height:46px}.big{text-align:center;font-size:22px;font-weight:800}.bad{background:#dc2626}\n.mu{color:#8b96b3;font-size:12px;text-align:center;margin-top:14px}\n</style></head><body><div class="card">\n<div class="top"><div class="shop">{{ shop }}</div><div class="sec">🔒 Secure UPI</div></div>\n{% if p.status == \'paid\' %}\n<div class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg></div>\n<div class="big">Payment Successful</div><div class="sub">{{ sym }}{{ \'%.2f\'|format(p.amount) }} received</div>\n<div class="row"><span>Order ID</span><b>{{ p.pay_no }}</b></div>\n<div class="row"><span>Transaction ID</span><b>{{ p.txn or \'-\' }}</b></div>\n<div class="row"><span>{{ \'Wallet\' if p.kind==\'topup\' else \'Item\' }}</span><b>{{ \'Recharge added to wallet\' if p.kind==\'topup\' else p.title }}</b></div>\n<div class="row"><span>Paid on</span><b>{{ p.paid_at|ts }} IST</b></div>\n<div class="row"><span>Status</span><b style="color:#4ade80">SUCCESS</b></div>\n<p class="sub" style="margin-top:14px">{{ \'Your wallet balance is updated.\' if p.kind==\'topup\' else \'Your key has been sent in Telegram.\' }}</p>\n{% if bot_user %}<a class="btn g" href="https://t.me/{{ bot_user }}">Back to Telegram</a>{% endif %}\n{% elif p.status in (\'expired\',\'cancelled\') %}\n<div class="ok bad"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></div>\n<div class="big">Payment {{ \'Expired\' if p.status==\'expired\' else \'Cancelled\' }}</div><div class="sub">Order {{ p.pay_no }}<br>If you already paid, it will be added automatically.</div>\n{% if bot_user %}<a class="btn" href="https://t.me/{{ bot_user }}">Back to Telegram</a>{% endif %}\n{% else %}\n<div class="amt">{{ sym }}{{ \'%.2f\'|format(p.amount) }}</div><div class="sub">{{ p.title }}</div>\n<div class="qr">{{ qr|safe if qr else \'QR not available\' }}</div>\n<div class="tm">Expires in <b id="t">--:--</b></div>\n<div class="wait"><span class="dot"></span> Waiting for payment…</div>\n{% if p.upi_uri %}<a class="btn" href="{{ p.upi_uri }}">Pay with UPI App</a>{% elif p.pay_url %}<a class="btn" href="{{ p.pay_url }}">Open payment link</a>{% endif %}\n<div class="row" style="margin-top:14px"><span>Order ID</span><b>{{ p.pay_no }}</b></div>\n<p class="mu">Scan with PhonePe, Google Pay, Paytm or any UPI app.<br>Do not close this page — it updates automatically.</p>\n<script>var left={{ left }};function f(){var m=Math.floor(left/60),s=left%60;document.getElementById(\'t\').textContent=(m<10?\'0\':\'\')+m+\':\'+(s<10?\'0\':\'\')+s;if(left<=0){location.reload();return}left--}f();setInterval(f,1000);\nsetInterval(function(){fetch(\'status\').then(function(r){return r.json()}).then(function(j){if(j.status!==\'pending\')location.reload()}).catch(function(){})},3000);</script>\n{% endif %}\n</div></body></html>'
+PAYPAGE = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">\n<title>{{ shop }} · Payment</title><style>\n*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,#1b2a4a 0,#0a0e17 55%);color:#eaf0ff;font-family:system-ui,Segoe UI,Roboto,sans-serif;display:flex;justify-content:center;padding:18px}\n.card{width:100%;max-width:410px;background:#111827;border:1px solid #223049;border-radius:20px;padding:22px;box-shadow:0 20px 60px #0008;align-self:flex-start;margin-top:10px}\n.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.shop{font-weight:700;font-size:16px}.sec{font-size:12px;color:#7ee0a0;background:#12301f;padding:4px 10px;border-radius:99px}\n.amt{text-align:center;margin:10px 0 4px;font-size:38px;font-weight:800}.sub{text-align:center;color:#8b96b3;font-size:13px;margin-bottom:14px}\n.qr{background:#fff;border-radius:16px;padding:14px;width:240px;height:240px;margin:0 auto;display:flex;align-items:center;justify-content:center}.qr svg{width:100%;height:100%}\n.row{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #1d2940;font-size:14px}.row span:first-child{color:#8b96b3}.row b{text-align:right;word-break:break-all}\n.btn{display:block;text-align:center;text-decoration:none;background:#3b82f6;color:#fff;padding:13px;border-radius:12px;font-weight:600;margin-top:16px}.btn.g{background:#16a34a}\n.wait{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:16px;color:#ffd166;font-size:14px}.dot{width:10px;height:10px;border-radius:50%;background:#ffd166;animation:p 1s infinite}@keyframes p{50%{opacity:.25}}\n.tm{text-align:center;color:#8b96b3;font-size:13px;margin-top:8px}.ok{width:84px;height:84px;border-radius:50%;background:#16a34a;margin:6px auto 14px;display:flex;align-items:center;justify-content:center;animation:pop .5s}\n@keyframes pop{0%{transform:scale(.3);opacity:0}100%{transform:scale(1);opacity:1}}.ok svg{width:46px;height:46px}.big{text-align:center;font-size:22px;font-weight:800}.bad{background:#dc2626}\n.mu{color:#8b96b3;font-size:12px;text-align:center;margin-top:14px}\n</style></head><body><div class="card">\n<div class="top"><div class="shop">{{ shop }}</div><div class="sec">🔒 Secure UPI</div></div>\n{% if p.status == \'paid\' %}\n<div class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg></div>\n<div class="big">Payment Successful</div><div class="sub">{{ sym }}{{ \'%.2f\'|format(p.pay_amount or p.amount) }} received</div>\n<div class="row"><span>Order ID</span><b>{{ p.pay_no }}</b></div>\n<div class="row"><span>Transaction ID</span><b>{{ p.txn or \'-\' }}</b></div>\n<div class="row"><span>{{ \'Wallet\' if p.kind==\'topup\' else \'Item\' }}</span><b>{{ \'Recharge added to wallet\' if p.kind==\'topup\' else p.title }}</b></div>\n<div class="row"><span>Paid on</span><b>{{ p.paid_at|ts }} IST</b></div>\n<div class="row"><span>Status</span><b style="color:#4ade80">SUCCESS</b></div>\n<p class="sub" style="margin-top:14px">{{ \'Your wallet balance is updated.\' if p.kind==\'topup\' else \'Your key has been sent in Telegram.\' }}</p>\n{% if bot_user %}<a class="btn g" href="https://t.me/{{ bot_user }}">Back to Telegram</a>{% endif %}\n{% elif p.status in (\'expired\',\'cancelled\') %}\n<div class="ok bad"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></div>\n<div class="big">Payment {{ \'Expired\' if p.status==\'expired\' else \'Cancelled\' }}</div><div class="sub">Order {{ p.pay_no }}<br>If you already paid, it will be added automatically.</div>\n{% if bot_user %}<a class="btn" href="https://t.me/{{ bot_user }}">Back to Telegram</a>{% endif %}\n{% else %}\n<div class="amt">{{ sym }}{{ \'%.2f\'|format(p.pay_amount or p.amount) }}</div><div class="sub">{{ p.title }}</div>\n<div class="qr">{{ qr|safe if qr else \'QR not available\' }}</div>\n<div class="tm">Expires in <b id="t">--:--</b></div>\n<div class="wait"><span class="dot"></span> Waiting for payment…</div>\n{% if p.upi_uri %}<a class="btn" href="{{ p.upi_uri }}">Pay with UPI App</a>{% elif p.pay_url %}<a class="btn" href="{{ p.pay_url }}">Open payment link</a>{% endif %}\n<div class="row" style="margin-top:14px"><span>Order ID</span><b>{{ p.pay_no }}</b></div>\n<p class="mu">Scan with PhonePe, Google Pay, Paytm or any UPI app.<br>Do not close this page — it updates automatically.</p>\n<script>var left={{ left }};function f(){var m=Math.floor(left/60),s=left%60;document.getElementById(\'t\').textContent=(m<10?\'0\':\'\')+m+\':\'+(s<10?\'0\':\'\')+s;if(left<=0){location.reload();return}left--}f();setInterval(f,1000);\nsetInterval(function(){fetch(\'status\').then(function(r){return r.json()}).then(function(j){if(j.status!==\'pending\')location.reload()}).catch(function(){})},3000);</script>\n{% endif %}\n</div></body></html>'
 
-app.jinja_loader = DictLoader({"payments.html": PAYMENTS, "coupons.html": COUPONS, "backup.html": BACKUP, "broadcast.html": BROADCAST,"products.html": PRODUCTS, "product.html": PRODUCT, "plan.html": PLAN, "deposits.html": DEPOSITS, "orders.html": ORDERS,"base.html": BASE, "login.html": LOGIN, "home.html": HOME, "emojis.html": EMOJIS, "settings.html": SETTINGS, "users.html": USERS})
+NEWPRODUCT = '{% extends \'base.html\' %}{% block body %}<h1>Add product</h1>\n<div class="card"><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}">\n<label>Product name</label><input name="name" required placeholder="e.g. Br Mods Pc Emulator">\n<label>Update group link (Join Telegram button after purchase) - optional</label><input name="link" placeholder="https://t.me/yourgroup">\n<h3>Plans</h3><p class="mu">Duration + Hours/Days, then User price and Reseller price (INR). Press <b>+ Add another plan</b> for more. Reseller price empty = same as user price.</p>\n<div id="rows"></div><button type="button" onclick="addRow()" style="margin:6px 0">+ Add another plan</button>\n<script>function addRow(){var d=document.createElement(\'div\');d.className=\'row\';d.style.cssText=\'flex-wrap:wrap;gap:6px;margin:8px 0\';\nd.innerHTML=\'<input name="dur" type="number" min="1" step="1" placeholder="Duration" style="width:95px;flex:none" required><select name="unit" style="width:95px;flex:none"><option value="hours">Hours</option><option value="days" selected>Days</option></select><input name="uprice" placeholder="User price" style="width:110px;flex:none" required><input name="rprice" placeholder="Reseller price" style="width:125px;flex:none"><button type="button" class="red" style="margin:0" onclick="this.parentNode.remove()">X</button>\';\ndocument.getElementById(\'rows\').appendChild(d)}addRow();</script>\n<button>Save product</button></form></div>{% endblock %}'
+FIND = '{% extends \'base.html\' %}{% block body %}<h1>Find order</h1>\n<form class="row" method="get"><input name="q" value="{{ q }}" placeholder="Order ID (ORD… / WAL…), transaction ID or user ID" autofocus><button style="margin:0">Find user</button></form><br>\n{% if q and not hits %}<div class="card">Nothing found for <b>{{ q }}</b>.</div>{% endif %}\n{% for h in hits %}<div class="card"><h3>{{ h.kind }}</h3>\n<p><b>Order ID:</b> {{ h.ref }}</p>\n{% for k, v in h.info %}<p class="mu">{{ k }}: <b>{{ v }}</b></p>{% endfor %}\n<p><b>User:</b> {{ h.uname or \'-\' }} · <b>ID:</b> {{ h.uid }} · <b>Username:</b> {{ (\'@\' + h.username) if h.username else \'-\' }}<br><b>Phone:</b> {{ h.phone or \'-\' }} · <b>Wallet:</b> ₹{{ \'%.2f\'|format(h.balance) }}</p>\n<a class="lk" href="/users?q={{ h.uid }}">Open user</a></div>{% endfor %}{% endblock %}'
+app.jinja_loader = DictLoader({"find.html": FIND, "newproduct.html": NEWPRODUCT, "payments.html": PAYMENTS, "coupons.html": COUPONS, "backup.html": BACKUP, "broadcast.html": BROADCAST,"products.html": PRODUCTS, "product.html": PRODUCT, "plan.html": PLAN, "deposits.html": DEPOSITS, "orders.html": ORDERS,"base.html": BASE, "login.html": LOGIN, "home.html": HOME, "emojis.html": EMOJIS, "settings.html": SETTINGS, "users.html": USERS})
 
 
 def csrf():
@@ -211,7 +222,7 @@ def public_url():
 
 
 app.jinja_env.globals.update(csrf=csrf, gs=lambda k: db.get(k), gw_on=gateway.configured,
-                             webhook_url=lambda: public_url() + "/webhook/gateway?s=" + db.get("gw_secret"))
+                             webhook_url=lambda: public_url() + "/webhook/gateway")
 app.jinja_env.filters["ts"] = lambda t: datetime.fromtimestamp(t or 0, IST).strftime("%d %b %H:%M")
 
 
@@ -330,6 +341,10 @@ def settings():
                     continue
                 if k == "pay_expire" and not (v.isdigit() and 1 <= int(v) <= 60):
                     continue
+                if k == "gw_token" and v != db.get("gw_token"):
+                    db.put("gw_connected", "0")
+                if k == "gw_gateway" and v not in ("paytm", "fampay"):
+                    continue
                 if k == "gw_base":
                     v = v.rstrip("/")
                     if v and not v.startswith("http"):
@@ -388,6 +403,54 @@ def num(x, default=0.0):
         return default
 
 
+import re
+
+
+def plan_parts(name):
+    """'10 days' -> ('10','days');  anything else -> None (shown as free text)"""
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(hours?|hrs?|days?)\s*", name or "", re.I)
+    if not m:
+        return None
+    n = float(m.group(1))
+    return (str(int(n)) if n == int(n) else str(n), "hours" if m.group(2).lower().startswith("h") else "days")
+
+
+def plan_name(n, unit):
+    n = num(n)
+    return f"{int(n) if n == int(n) else n} {'hours' if unit == 'hours' else 'days'}" if n > 0 else ""
+
+
+app.jinja_env.filters["pp"] = plan_parts
+
+
+def parse_plan_rows(f):
+    out = []
+    for dur, unit, up, rp in zip(f.getlist("dur"), f.getlist("unit"), f.getlist("uprice"), f.getlist("rprice")):
+        name, price = plan_name(dur, unit), num(up)
+        if name and price > 0:
+            out.append((name, price, num(rp)))
+    return out
+
+
+@app.route("/products/new", methods=["GET", "POST"])
+def product_new():
+    if request.method == "POST":
+        f = request.form
+        name = f.get("name", "").strip()
+        plans = parse_plan_rows(f)
+        if not name:
+            flash("Enter the product name")
+            return redirect("/products/new")
+        with db.conn() as c:
+            cur = c.execute("INSERT INTO products(name,link) VALUES(?,?)", (name, f.get("link", "").strip()))
+            pid = cur.lastrowid
+            for n, (pn, pr, rp) in enumerate(plans):
+                c.execute("INSERT INTO plans(product_id,name,price,rprice,sort) VALUES(?,?,?,?,?)", (pid, pn, pr, rp, n))
+        flash(f"Product added with {len(plans)} plan(s). Now open a plan and add its keys.")
+        return redirect(f"/products/{pid}")
+    return page("newproduct", tab="products")
+
+
 @app.route("/products", methods=["GET", "POST"])
 def products():
     if request.method == "POST" and request.form.get("name", "").strip():
@@ -407,8 +470,8 @@ def product_page(pid):
         a, f = request.form.get("a"), request.form
         with db.conn() as c:
             if a == "edit":
-                c.execute("UPDATE products SET name=?, descr=?, active=?, sort=? WHERE id=?",
-                          (f.get("name", "").strip() or p["name"], f.get("descr", "").strip(), 1 if f.get("active") == "1" else 0, int(num(f.get("sort"))), pid))
+                c.execute("UPDATE products SET name=?, descr=?, link=?, active=?, sort=? WHERE id=?",
+                          (f.get("name", "").strip() or p["name"], f.get("descr", "").strip(), f.get("link", "").strip(), 1 if f.get("active") == "1" else 0, int(num(f.get("sort"))), pid))
                 flash("Saved")
             elif a == "del":
                 c.execute("DELETE FROM keys WHERE used=0 AND plan_id IN (SELECT id FROM plans WHERE product_id=?)", (pid,))
@@ -416,13 +479,20 @@ def product_page(pid):
                 c.execute("DELETE FROM products WHERE id=?", (pid,))
                 flash("Product deleted")
                 return redirect("/products")
+            elif a == "addplans":
+                rows_ = parse_plan_rows(f)
+                base = c.execute("SELECT COALESCE(MAX(sort),0) FROM plans WHERE product_id=?", (pid,)).fetchone()[0]
+                for n, (pn, pr, rp) in enumerate(rows_, 1):
+                    c.execute("INSERT INTO plans(product_id,name,price,rprice,sort) VALUES(?,?,?,?,?)", (pid, pn, pr, rp, base + n))
+                flash(f"{len(rows_)} plan(s) added" if rows_ else "Enter duration and price")
             elif a == "addplan" and f.get("name", "").strip():
                 c.execute("INSERT INTO plans(product_id,name,price,rprice) VALUES(?,?,?,?)",
                           (pid, f["name"].strip(), num(f.get("price")), num(f.get("rprice"))))
                 flash("Plan added")
             elif a == "saveplan":
+                pname = plan_name(f.get("dur"), f.get("unit")) if f.get("dur") else f.get("name", "").strip()
                 c.execute("UPDATE plans SET name=?, price=?, rprice=?, active=? WHERE id=? AND product_id=?",
-                          (f.get("name", "").strip(), num(f.get("price")), num(f.get("rprice")), 1 if f.get("active") == "1" else 0, int(f.get("plan_id", 0)), pid))
+                          (pname or "Plan", num(f.get("price")), num(f.get("rprice")), 1 if f.get("active") == "1" else 0, int(f.get("plan_id", 0)), pid))
                 flash("Plan saved")
             elif a == "delplan":
                 plid = int(f.get("plan_id", 0))
@@ -576,30 +646,71 @@ def pay_status(token):
     return {"status": p["status"] if p else "none"}
 
 
-PAID_WORDS = gateway.PAID_WORDS
+@app.route("/gateway/connect", methods=["POST"])
+def gateway_connect():
+    f = request.form
+    for k in ("gw_gateway", "gw_token", "gw_base", "gw_webhook_secret", "pay_name", "pay_expire"):
+        if k not in f:
+            continue
+        v = f[k].strip()
+        if k == "gw_gateway" and v not in ("paytm", "fampay"):
+            continue
+        if k == "pay_expire" and not (v.isdigit() and 1 <= int(v) <= 60):
+            continue
+        if k == "gw_base":
+            v = v.rstrip("/")
+            if v and not v.startswith("http"):
+                v = "https://" + v
+        db.put(k, v)
+    ok, msg = gateway.connect_test()
+    db.put("gw_connected", "1" if ok else "0")
+    flash(("✅ " if ok else "❌ ") + msg)
+    return redirect("/settings")
 
 
 @app.route("/webhook/gateway", methods=["GET", "POST"])
 def gw_webhook():
-    sec = db.get("gw_secret")
-    if not sec or not hmac.compare_digest(request.args.get("s", ""), sec):
-        return "forbidden", 403
-    data = {**request.args.to_dict(), **(request.get_json(silent=True) or {}), **request.form.to_dict()}
-    inner = data.get("data") if isinstance(data.get("data"), dict) else {}
-    data = {**inner, **data}
-    no = next((str(data[k]) for k in ("order_id", "orderId", "client_order_id", "merchant_order_id", "client_txn_id") if data.get(k)), "")
+    if request.method == "GET":
+        return "ok"
+    raw = request.get_data(as_text=True)
+    secret = db.get("gw_webhook_secret").strip()
+    signed = False
+    if secret:
+        if not gateway.verify_signature(secret, request.headers.get("X-Payment-Gateway-Timestamp", "0"),
+                                        request.headers.get("X-Payment-Gateway-Signature", ""), raw):
+            return "bad signature", 401
+        signed = True
+    try:
+        d = json.loads(raw or "{}")
+    except ValueError:
+        d = {}
+    if not isinstance(d, dict) or d.get("event") != "payment.success" or str(d.get("status", "")).upper() != "SUCCESS":
+        return "ok"
+    no = str(d.get("order_id") or "")
     p = db.pay_get(no) if no else None
     if not p:
-        return "order not found", 404
-    st = str(data.get("status") or data.get("payment_status") or "").lower()
-    txn = str(data.get("utr") or data.get("txn_id") or data.get("transaction_id") or data.get("rrn") or "")
-    if st in PAID_WORDS:
+        return "ok"
+    txn = str(d.get("transaction_id") or "")
+    if signed:
+        try:
+            paid_amt = float(d.get("amount"))
+        except (TypeError, ValueError):
+            paid_amt = None
+        want = p["pay_amount"] or p["amount"]
+        if paid_amt is not None and abs(paid_amt - want) > 0.01:
+            return "amount mismatch", 200
         threading.Thread(target=bot.complete_pay, args=(no, txn), daemon=True).start()
-    elif gateway.configured():
-        s2, t2 = gateway.check(no)
-        if s2 == "paid":
+    else:
+        st, t2, _a = gateway.check(no)
+        if st == "paid":
             threading.Thread(target=bot.complete_pay, args=(no, t2 or txn), daemon=True).start()
     return "ok"
+
+
+@app.route("/find")
+def find_page():
+    q = request.args.get("q", "").strip()
+    return page("find", q=q, hits=db.find_order(q) if q else [], tab="find")
 
 
 @app.route("/payments")
@@ -607,10 +718,18 @@ def payments():
     tabs = [("review", "To review"), ("pending", "Waiting"), ("paid", "Paid"), ("rejected", "Rejected"), ("expired", "Expired"), ("cancelled", "Cancelled"), ("all", "All")]
     st = request.args.get("s", "review")
     q = """SELECT p.*, u.name, u.symbol FROM pay_orders p LEFT JOIN users u ON u.id=p.user_id"""
+    qs = request.args.get("q", "").strip()
+    conds, args = [], []
+    if qs:
+        st = "all"
+        conds.append("(p.pay_no LIKE ? OR p.txn LIKE ? OR u.name LIKE ? OR CAST(p.user_id AS TEXT)=?)")
+        args += [f"%{qs}%", f"%{qs}%", f"%{qs}%", qs]
+    elif st != "all":
+        conds.append("p.status=?")
+        args.append(st)
     with db.conn() as c:
-        rows = c.execute(q + (" WHERE p.status=?" if st != "all" else "") + " ORDER BY p.id DESC LIMIT 150",
-                         (st,) if st != "all" else ()).fetchall()
-    return page("payments", rows=rows, s=st, tabs=tabs, tab="payments")
+        rows = c.execute(q + (" WHERE " + " AND ".join(conds) if conds else "") + " ORDER BY p.id DESC LIMIT 150", args).fetchall()
+    return page("payments", rows=rows, s=st, tabs=tabs, tab="payments", qs=qs)
 
 
 @app.route("/payments/<no>", methods=["POST"])

@@ -222,6 +222,8 @@ def link(v, kind):
     if kind == "tg":
         if v.startswith("http"):
             return v
+        if v.lower().startswith(("t.me/", "telegram.me/")):
+            return "https://" + v
         return "https://t.me/" + v.lstrip("@")
     if kind == "wa":
         if v.startswith("http"):
@@ -387,15 +389,30 @@ def sup_screen(u):
 
 
 
+LINE = "━━━━━━━━━━━━━━━━━━━━"
+
+
+def rs(x):
+    """₹90.9 / ₹100 / ₹270.9"""
+    return "₹" + f"{x:.2f}".rstrip("0").rstrip(".")
+
+
+def role_name(u):
+    return "Reseller" if u["role"] == "reseller" else "User"
+
+
 def shop_screen(u):
-    text = (f"{E('sale')} ━━ <b>PRODUCT STORE</b> ━━\n\n"
-            f"{E('wallet')} Balance: <b>{fmt(u, u['balance'])}</b>\n\n")
+    text = f"{E('cart')} <b>{esc(db.get('shop_name', 'SHOP'))}</b>\n{LINE}\n\n{E('lineup')} <b>Product Lineup</b>\n\n"
+    bl = [f"➳ {esc(x.strip())}" for x in db.get("shop_bullets").splitlines() if x.strip()]
+    if bl:
+        text += "\n".join(bl) + "\n\n"
     rows = []
     prods = db.products()
     for p in prods:
         tag = "" if p["stock"] else " · Sold out"
-        rows.append([B(p["name"] + tag, cb=f"p:{p['id']}", style="primary", ek="key")])
-    text += (f"{E('tap')} <i>Select a product:</i>" if prods else "<i>No products available yet.</i>")
+        rows.append([B(p["name"] + tag, cb=f"p:{p['id']}", style="primary", ek="cart")])
+    text += (f"{E('shield')} <b>Pick what you want</b> {E('tap')}\nTap any product to see options." if prods
+             else "<i>No products available yet.</i>")
     rows.append([back_btn()])
     return text, KB(*rows)
 
@@ -404,19 +421,26 @@ def prod_screen(u, pid):
     p = db.product(pid)
     if not p or not p["active"]:
         return shop_screen(u)
-    text = f"{E('key')} <b>{esc(p['name'])}</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+    text = (f"<blockquote>{E('cart')} <b>{esc(p['name'])}</b></blockquote>\n\n"
+            f"<blockquote>{E('crown')} Account Type: <b>{role_name(u)}</b></blockquote>\n\n"
+            f"<blockquote>{E('chart')} <b>See Current Plans &amp; Pricing</b></blockquote>\n\n")
     if p["descr"]:
         text += f"{esc(p['descr'])}\n\n"
-    text += f"{E('tap')} <i>Choose a plan:</i>"
+    plans = db.plans_of(pid)
     rows = []
-    for pl in db.plans_of(pid):
+    for n, pl in enumerate(plans):
         price = db.price_for(u, pl)
+        br = "└──" if n == len(plans) - 1 else "├──"
+        text += f"{br} {E('time')} {esc(pl['name'])} ➝ {E('money')} {rs(price)}{'' if pl['stock'] > 0 else ' (Sold out)'}\n"
         if pl["stock"] > 0:
-            label, cb = f"{pl['name']} · {u['symbol']}{price:g}", f"pl:{pl['id']}"
+            rows.append([B(f"Buy {pl['name']} · {rs(price)}", cb=f"pl:{pl['id']}", style="success", ek="cart")])
         else:
-            label, cb = f"{pl['name']} · Sold out", "oos"
-        rows.append([B(label, cb=cb, style="primary" if pl["stock"] else None)])
-    rows.append([B("Back", cb="shop", style="danger", ek="back")])
+            rows.append([B(f"{pl['name']} · Sold out", cb="oos")])
+    if plans:
+        text += f"\n{E('tap')} <b>CHOOSE A PLAN</b> {E('tap')}"
+    else:
+        text += "<i>No plans available yet.</i>"
+    rows.append([B("BACK", cb="shop", style="danger", ek="back")])
     return text, KB(*rows)
 
 
@@ -449,13 +473,12 @@ def methods_for(u):
 
 
 def topup_methods_screen(u, amt):
-    ms = methods_for(u)
-    text = (f"{E('money')} <b>SELECT PAYMENT METHOD</b>\n━━━━━━━━━━━━━━━━━━━━\n"
-            f"{E('wallet')} Add to wallet: <b>{u['symbol']}{amt} {u['currency']}</b>\n\n")
-    text += f"{E('tap')} <i>Choose how you want to pay:</i>" if ms else "<i>No payment method is set up yet. Please contact support.</i>"
-    btns = [B(lb, cb=f"t{k}:{amt}", style="primary", ek=ek) for lb, k, ek in ms]
-    rows = [btns[i:i + 2] for i in range(0, len(btns), 2)]
-    rows.append([B("Back", cb="addbal", style="danger", ek="back")])
+    text = (f"<blockquote>{E('money')} <b>ADD BALANCE</b></blockquote>\n{LINE}\n\n"
+            f"➛ {E('wallet')} Add to wallet: <b>{rs(float(amt))} INR</b>\n\n"
+            f"{E('tap')} <b>Pick how you want to pay:</b>")
+    rows = [[B(f"Pay via UPI — {rs(float(amt))} INR", cb=f"tq:{amt}", style="primary", ek="upi")],
+            [B(f"Pay via Binance — ${usd_of(u, float(amt)):.2f} USDT", cb=f"tb:{amt}", style="primary", ek="binance")],
+            [B("BACK", cb="addbal", style="danger", ek="back")]]
     return text, KB(*rows)
 
 
@@ -473,46 +496,61 @@ def plan_screen(u, plid):
         db.cp_set(u["id"], 0, "")
         code = ""
     base = db.price_for(u, pl)
-    price_line = f"<s>{fmt(u, base)}</s> ➜ <b>{fmt(u, final)}</b>" if disc else f"<b>{fmt(u, final)}</b>"
-    text = (
-        f"{E('receipt')} <b>ORDER SUMMARY</b>\n━━━━━━━━━━━━━━━━━━━━\n"
-        f"├── {E('user')} Name: <b><i>{esc(u['name'])}</i></b>\n"
-        f"├── {E('idcard')} User ID: <code>{u['id']}</code>\n"
-        f"├── {E('phone')} Phone: <code>{esc(phone_txt(u))}</code>\n"
-        f"├── {E('key')} Product: <b>{esc(pl['pname'])}</b>\n"
-        f"├── {E('cart')} Plan: <b>{esc(pl['name'])}</b>\n"
-        f"├── {E('money')} Price: {price_line}\n"
-    )
+    text = (f"<blockquote>{E('receipt')} <b>CHECKOUT SUMMARY</b></blockquote>\n{LINE}\n\n"
+            f"➛ {E('user')} Name: <b>{esc(u['name'])}</b>\n"
+            f"➛ {E('idcard')} User ID: <code>{u['id']}</code>\n")
+    if u["phone"]:
+        text += f"➛ {E('phone')} Phone: <code>{esc(phone_txt(u))}</code>\n"
+    text += (f"➛ {E('key')} Product: {esc(pl['pname'])}\n"
+             f"➛ {E('time')} Plan: {esc(pl['name'])}\n"
+             f"➛ {E('cart')} Quantity: 1\n"
+             f"➛ {E('money')} Price: {fmt(u, base)} each\n")
     if code:
-        text += f"├── {E('coupon')} Coupon: <code>{esc(code)}</code> (-{fmt(u, disc)})\n"
-    text += f"└── {E('wallet')} Wallet Balance: <b>{fmt(u, u['balance'])}</b>\n"
+        text += f"➛ {E('coupon')} Coupon: <code>{esc(code)}</code> (-{fmt(u, disc)})\n"
+    text += (f"\n{E('money')} <b>Final Total: {fmt(u, final)}</b>\n"
+             f"{E('wallet')} Wallet Balance: <b>{fmt(u, u['balance'])}</b>\n\n")
     rows = []
     if pl["stock"] <= 0:
-        text += "\n<i>This plan is sold out.</i>"
+        text += "<i>This plan is sold out.</i>"
     else:
-        if u["balance"] >= final:
-            rows.append([B("Pay Wallet", cb=f"buy:{plid}", style="success", ek="wallet")])
-        btns = [B(lb, cb=f"p{k}:{plid}", style="primary", ek=ek) for lb, k, ek in methods_for(u)]
-        btns.append(B("Coupon", cb=f"cp:{plid}", style="success", ek="coupon"))
-        for i in range(0, len(btns), 2):
-            rows.append(btns[i:i + 2])
-        if u["balance"] < final:
-            text += f"\n{E('info')} <i>Wallet balance is low. Pick a payment method below.</i>"
-    rows.append([B("Back", cb=f"p:{pl['product_id']}", style="danger", ek="back")])
+        text += (f"{E('tap')} <b>Pick how you want to pay:</b>\n"
+                 f"Pick any option below. If you have wallet balance, you can pay instantly.")
+        rows.append([B("Pay via Wallet", cb=f"buy:{plid}", style="primary", ek="bag")])
+        rows.append([B(f"Pay via UPI — {fmt(u, final)}", cb=f"pq:{plid}", style="primary", ek="upi")])
+        rows.append([B(f"Pay via Binance — ${usd_of(u, final):.2f} USDT", cb=f"pb:{plid}", style="primary", ek="binance")])
+        rows.append([B("Apply Coupon Code", cb=f"cp:{plid}", style="primary", ek="coupon")])
+    rows.append([B("BACK", cb=f"p:{pl['product_id']}", style="danger", ek="back")])
     return text, KB(*rows)
 
 
-def order_screen(u, o):
-    text = (
-        f"{E('check')} <b>ORDER SUCCESSFUL</b>\n━━━━━━━━━━━━━━━━━━━━\n"
-        f"├── {E('check')} Order: <code>{o['order_no']}</code>\n"
-        f"├── {E('cart')} {esc(o['product'])} · {esc(o['plan'])}\n"
-        f"├── {E('money')} {fmt(u, o['price'])}\n"
-        f"├── {E('time')} {ist(o['created'])}\n"
-        f"└── {E('key')} <code>{esc(o['key'])}</code>\n\n"
-        f"{E('info')} <i>Tap the key to copy it. It is also saved in All History.</i>"
+def after_buy_rows(plan_id):
+    """Join Telegram (the product's update group) + Main Panel"""
+    rows = []
+    url = link(db.plan_link(plan_id), "tg")
+    if url:
+        rows.append([B("Join Telegram Group", url=url, style="danger", ek="telegram")])
+    rows.append([B("Main Menu", cb="menu", style="danger", ek="home")])
+    return rows
+
+
+def delivery_text(u, o, method, title):
+    return (
+        f"{E('money')} <b>{title}</b> ✨\n<i>Instant Key Delivery!</i>\n\n"
+        f"{E('receipt')} <b>ORDER DETAILS</b>\n"
+        f"├── {E('user')} <b>User ID:</b>{u['id']}\n\n"
+        f"├── {E('shield')} <b>Order ID:</b><code>{o['order_no']}</code>\n\n"
+        f"├── {E('cart')} <b>Product ID:</b>{esc(o['product'])}\n\n"
+        f"├── {E('cart')} <b>Product:</b>{esc(o['product'])}\n\n"
+        f"├── {E('time')} <b>Plan:</b>{esc(o['plan'])}\n\n"
+        f"├── {E('paid')} <b>Method:</b>{method}\n\n"
+        f"└── {E('money')} <b>Paid:</b>{fmt(u, o['price'])}\n\n"
+        f"{E('key')} <b>YOUR KEY:</b><code>{esc(o['key'])}</code>\n\n"
+        f"{E('info')} <i>Tap the key above to copy instantly.</i>"
     )
-    return text, KB([B("Shop More", cb="shop", style="primary", ek="sale")], [back_btn()])
+
+
+def order_screen(u, o):
+    return delivery_text(u, o, "Wallet Method", "WALLET PAYMENT SUCCESSFUL"), KB(*after_buy_rows(o.get("plan_id", 0)))
 
 
 def send_payment(chat, mid, u, dep_id, amt):
@@ -573,24 +611,21 @@ def qr_png(data):
 
 def pay_caption(pay, u):
     exp = int(db.get("pay_expire", "10") or 10)
-    return (f"{E('qr')} <b>PAY VIA QR</b>\n━━━━━━━━━━━━━━━━━━━━\n"
-            f"├── {E('receipt')} Order ID: <code>{pay['pay_no']}</code>\n"
-            f"├── {E('key')} {esc(pay['title'])}\n"
-            f"├── {E('money')} Amount: <b>{fmt(u, pay['amount'])}</b>\n"
-            f"└── {E('time')} Valid for: <b>{exp} min</b>\n\n"
-            f"1️⃣ Scan this QR with any UPI app (or tap <b>Open Payment Page</b>).\n"
-            f"2️⃣ Pay the <b>exact amount</b>. Payment is detected automatically — no screenshot needed.")
+    topay = pay["pay_amount"] or pay["amount"]
+    return (f"{LINE}\n{E('money')} <b>UPI PAYMENT GATEWAY</b>\n{LINE}\n\n"
+            f"➛ {E('money')} Amount: <b>{fmt(u, topay)}</b>\n"
+            f"➛ {E('ban')} Order: <code>{pay['pay_no']}</code>\n\n"
+            f"➛ {E('time')} Expires in {exp} minutes\n"
+            f"➛ {E('fire2')} Instant Verification\n\n"
+            f"<b>How to pay</b>\n"
+            f"➛ Scan the QR code below to pay.\n"
+            f"➛ Your payment will be verified automatically!")
 
 
 def send_pay_msg(chat, mid, u, pay):
     if mid:
         api("deleteMessage", chat_id=chat, message_id=mid)
-    rows = []
-    pu = page_url(pay)
-    if pu:
-        rows.append([B("Open Payment Page", url=pu, style="primary", ek="qr")])
-    rows.append([B("Cancel", cb=f"pc:{pay['pay_no']}", style="danger", ek="cancel")])
-    kb = KB(*rows)
+    kb = KB([B("Back to Store", cb="menu", style="danger", ek="home")])
     cap = pay_caption(pay, u)
     png = None
     try:
@@ -611,15 +646,15 @@ def send_pay_msg(chat, mid, u, pay):
 def start_qr(chat, mid, u, kind, amount, plid, code, title):
     """create the order on the gateway and show the QR"""
     pay = db.pay_create(u["id"], kind, amount, plid, code, title)
-    hook = f"{PUBLIC_URL}/webhook/gateway?s={db.get('gw_secret')}" if PUBLIC_URL else ""
+    hook = f"{PUBLIC_URL}/webhook/gateway" if PUBLIC_URL else ""
     res = gateway.create(pay["pay_no"], amount, u, page_url(pay), hook)
     if not res["ok"]:
         db.pay_update(pay["pay_no"], status="cancelled")
         send(chat, f"⚠️ <b>Could not start payment.</b>\n<i>{esc(res['err'])}</i>\nPlease try again or contact support.",
              KB([back_btn()]))
         return
-    uri = res["upi_uri"] or own_upi_uri(amount, pay["pay_no"])
-    db.pay_update(pay["pay_no"], upi_uri=uri, pay_url=res["pay_url"], gw_ref=res["ref"])
+    uri = res["upi_uri"]
+    db.pay_update(pay["pay_no"], upi_uri=uri, pay_url=res["pay_url"], gw_ref=res["ref"], pay_amount=res["pay_amount"])
     send_pay_msg(chat, mid, u, db.pay_get(pay["pay_no"]))
 
 
@@ -701,7 +736,7 @@ def success_block(u, pay, txn, extra=""):
     return (f"{E('success')} <b>PAYMENT SUCCESSFUL</b>\n━━━━━━━━━━━━━━━━━━━━\n"
             f"├── {E('receipt')} Order ID: <code>{pay['pay_no']}</code>\n"
             f"├── {E('txn')} Transaction ID: <code>{esc(txn or '-')}</code>\n"
-            f"├── {E('money')} Amount: <b>{fmt(u, pay['amount'])}</b>\n"
+            f"├── {E('money')} Amount: <b>{fmt(u, pay['pay_amount'] or pay['amount'])}</b>\n"
             f"├── {E('time')} {ist(int(time.time()))}\n{extra}")
 
 
@@ -732,11 +767,9 @@ def complete_pay(pay_no, txn=""):
             o = res[1]
             db.pay_update(pay_no, order_no=o["order_no"])
             u = db.user(uid)
-            text = (success_block(u, pay, txn, f"└── {E('cart')} {esc(o['product'])} · {esc(o['plan'])}\n") +
-                    f"\n{E('key')} <b>Your key:</b>\n<code>{esc(o['key'])}</code>\n\n"
-                    f"{E('info')} <i>Tap the key to copy. Saved in All History too.</i>\n"
-                    f"{E('cart')} Order: <code>{o['order_no']}</code>")
-            send(chat, text, KB([B("Shop More", cb="shop", style="primary", ek="sale")], [back_btn()]))
+            send(chat, success_block(u, pay, txn, f"└── {E('cart')} {esc(o['product'])} · {esc(o['plan'])}\n"))
+            mname = {"binance": "Binance Method"}.get(pay["method"], "UPI Method")
+            send(chat, delivery_text(u, o, mname, "PAYMENT SUCCESSFUL"), KB(*after_buy_rows(pay["plan_id"])))
             comm = db.pay_commission(uid, o["price"])
             if comm:
                 ru = db.user(comm[0])
@@ -757,26 +790,56 @@ def complete_pay(pay_no, txn=""):
     return pay
 
 
+def find_text(h):
+    """admin: which user made this order"""
+    t = (f"{E('receipt')} <b>{esc(h['kind'])}</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+         f"├── {E('ban')} Order ID: <code>{esc(h['ref'])}</code>\n")
+    for k, v in h["info"]:
+        t += f"├── {esc(k)}: <b>{esc(str(v))}</b>\n"
+    t += (f"├── {E('user')} User: <b>{esc(h['uname'] or '-')}</b>\n"
+          f"├── {E('idcard')} User ID: <code>{h['uid']}</code>\n"
+          f"├── {E('telegram')} Username: {('@' + esc(h['username'])) if h['username'] else '-'}\n"
+          f"├── {E('phone')} Phone: <code>{esc(h['phone'] or '-')}</code>\n"
+          f"└── {E('wallet')} Wallet: <b>₹{h['balance']:.2f}</b>")
+    return t
+
+
+_polled = {}
+
+
+def expired_text(pay, minutes):
+    return (f"{E('tap')} <b>PAYMENT EXPIRED</b>\n{LINE}\n\n"
+            f"— {E('fire2')} Order Id : <code>{pay['pay_no']}</code>\n"
+            f"— {E('cancel')} Not paid within {minutes} minutes\n"
+            f"— {E('ban')} QR / payment details are no longer valid\n\n"
+            f"Tap /start to begin a new order.")
+
+
 def pay_watch():
-    """background: check pending QR payments every few seconds, expire old ones"""
+    """background: check pending QR payments, and send 'PAYMENT EXPIRED' when the time is over"""
     while True:
-        time.sleep(4)
+        time.sleep(3)
         try:
-            exp = int(db.get("pay_expire", "10") or 10) * 60
-            for p in db.pay_pending():
+            minutes = int(db.get("pay_expire", "5") or 5)
+            exp = minutes * 60
+            for p in db.pay_pending()[:8]:
                 if time.time() - p["created"] > exp:
-                    # one last check, then expire (a late payment can still be honoured by the webhook)
-                    if gateway.configured() and gateway.check(p["pay_no"])[0] == "paid":
-                        complete_pay(p["pay_no"], gateway.check(p["pay_no"])[1])
-                        continue
+                    # one last check, then expire (a late payment is still honoured by webhook / admin)
+                    if gateway.configured():
+                        st0, tx0, _a = gateway.check(p["pay_no"])
+                        if st0 == "paid":
+                            complete_pay(p["pay_no"], tx0)
+                            continue
                     db.pay_update(p["pay_no"], status="expired")
-                    if p["chat_id"] and p["msg_id"]:
-                        api("deleteMessage", chat_id=p["chat_id"], message_id=p["msg_id"])
-                        send(p["chat_id"], f"{E('wait')} <b>Payment expired</b>\nOrder <code>{p['pay_no']}</code> was not paid in time. "
-                                           f"If you already paid, it will still be added automatically.", KB([back_btn()]))
+                    _polled.pop(p["pay_no"], None)
+                    if p["chat_id"]:
+                        if p["msg_id"]:
+                            api("deleteMessage", chat_id=p["chat_id"], message_id=p["msg_id"])
+                        send(p["chat_id"], expired_text(p, minutes))
                     continue
-                if gateway.configured():
-                    st, txn = gateway.check(p["pay_no"])
+                if gateway.configured() and time.time() - _polled.get(p["pay_no"], 0) >= 6:
+                    _polled[p["pay_no"]] = time.time()
+                    st, txn, _a = gateway.check(p["pay_no"])
                     if st == "paid":
                         complete_pay(p["pay_no"], txn)
                     elif st == "failed":
@@ -876,6 +939,19 @@ def on_message(m):
              "\n\nPaste the ID in the website admin panel → Premium Emoji.")
         return
 
+    if uid == ADMIN_ID and text.startswith("/find"):
+        q = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) > 1 else ""
+        if not q:
+            send(chat, "Send: <code>/find ORD2026...</code> (order ID, WAL… order, or transaction ID)")
+            return
+        hits = db.find_order(q)
+        if not hits:
+            send(chat, f"❌ Nothing found for <code>{esc(q)}</code>.")
+            return
+        for h in hits[:5]:
+            send(chat, find_text(h))
+        return
+
     if uid == ADMIN_ID and text.startswith("/emojitest"):
         ok, rep = emoji_test()
         send(chat, ("✅ " if ok else "⚠️ ") + esc(rep))
@@ -893,7 +969,7 @@ def on_message(m):
                 ref = int(parts[1][4:])
             except ValueError:
                 pass
-        u = db.ensure_user(fr, ref)
+        u = db.autoverify(db.ensure_user(fr, ref))
         if u["banned"]:
             return
         send_menu(chat, u) if u["verified"] else ask_phone(chat)
@@ -918,7 +994,7 @@ def on_message(m):
         send_menu(chat, db.user(uid))
         return
 
-    u = db.user(uid)
+    u = db.autoverify(db.user(uid))
     if not u or not u["verified"]:
         ask_phone(chat)
         return
@@ -1029,7 +1105,7 @@ def on_cb(cq):
             send(chat, f"{'✅ Approved' if ok else '❌ Rejected'} deposit <code>#{did}</code>.")
         return
 
-    u = db.user(uid)
+    u = db.autoverify(db.user(uid))
     if not u or not u["verified"] or u["banned"]:
         ans(cq, "Please /start the bot first.", True)
         return
@@ -1070,21 +1146,23 @@ def on_cb(cq):
         if pl["stock"] <= 0:
             ans(cq, "This plan is sold out.", True)
             return
-        if u["currency"] != "INR":
-            ans(cq, "UPI QR is for India (INR) users. Please pay from your wallet.", True)
-            return
-        if not gateway.configured():
-            ans(cq, "QR payment is not active yet. Please use wallet or contact support.", True)
-            return
         final, disc, err = db.coupon_calc(u, pl, db.cp_get(uid, plid))
         if err:
             ans(cq, err, True)
             return
         if final <= 0:
-            ans(cq, "Price is 0 after coupon - use Pay Wallet.", True)
+            ans(cq, "Price is 0 after coupon - use Pay via Wallet.", True)
             return
-        ans(cq, "Creating payment...")
-        start_qr(chat, mid, u, "buy", final, plid, db.cp_get(uid, plid), f"{pl['pname']} · {pl['name']}")
+        code = db.cp_get(uid, plid)
+        title = f"{pl['pname']} · {pl['name']}"
+        if gateway.configured():
+            ans(cq, "Creating payment...")
+            start_qr(chat, mid, u, "buy", final, plid, code, title)
+        elif not method_err(u, "upi"):
+            ans(cq)
+            start_manual(chat, mid, u, "upi", "buy", final, plid, code, title)
+        else:
+            ans(cq, "UPI payment is not available right now.", True)
         return
     elif data[:3] in ("pu:", "pb:"):
         plid = int(data[3:])
@@ -1117,14 +1195,17 @@ def on_cb(cq):
             ans(cq, f"Amount must be between {u['symbol']}{mn} and {u['symbol']}{mx:,}", True)
             return
         k = data[1]
-        if k == "q":
-            if u["currency"] != "INR" or not gateway.configured():
-                ans(cq, "QR payment is not available right now.", True)
-                return
-            ans(cq, "Creating payment...")
-            start_qr(chat, mid, u, "topup", float(amt), 0, "", "Wallet Recharge")
+        if k in ("q", "u"):
+            if gateway.configured():
+                ans(cq, "Creating payment...")
+                start_qr(chat, mid, u, "topup", float(amt), 0, "", "Wallet Recharge")
+            elif not method_err(u, "upi"):
+                ans(cq)
+                start_manual(chat, mid, u, "upi", "topup", float(amt), 0, "", "Wallet Recharge")
+            else:
+                ans(cq, "UPI payment is not available right now.", True)
             return
-        method = "binance" if k == "b" else ("upi" if u["currency"] == "INR" else "other")
+        method = "binance"
         e = method_err(u, method)
         if e:
             ans(cq, e, True)
@@ -1173,7 +1254,7 @@ def on_cb(cq):
             if res[2] <= int(db.get("low_stock", "3") or 3) and ADMIN_ID:
                 send(ADMIN_ID, f"{E('box')} Low stock: <b>{esc(res[1]['product'])} · {esc(res[1]['plan'])}</b> has {res[2]} key(s) left.")
         elif res[0] == "bal":
-            ans(cq, "Not enough balance. Please add balance first.", True)
+            ans(cq, "Insufficient wallet balance. Add balance, or pay via UPI / Binance.", True)
             return
         elif res[0] == "stock":
             ans(cq, "Sorry, this plan just sold out.", True)

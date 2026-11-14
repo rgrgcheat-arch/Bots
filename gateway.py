@@ -1,97 +1,127 @@
 """
-Payment gateway client (QR / UPI auto-detect).
-
-Admin website -> Settings -> "QR Payment Gateway":
-  Gateway base URL, API token, create-order path, check-order path.
-
-!! If your gateway uses different field names, change ONLY the two small
-!! functions create() and check() below (marked  <<< ADJUST HERE >>>).
+Payment gateway client for YOUR OWN gateway (FamPay + Paytm, UPI QR, auto detect).
+API docs: payment-gateway-api-docs.txt   ->  POST /api/v1/payment/create , GET /api/verify.php
+Website admin -> Settings -> Payment Gateway: choose gateway, paste API token, Save & Connect.
+The Base URL is changeable there, everything else stays the same.
 """
-import requests, json
+import hmac, hashlib, time, requests
 import db
 
-PAID_WORDS = {"paid", "success", "successful", "completed", "complete", "captured", "credit", "credited", "done"}
-FAIL_WORDS = {"failed", "failure", "expired", "cancelled", "canceled", "rejected"}
+DEFAULT_BASE = "https://paymentgateway-0km8.onrender.com"
+
+
+def _base():
+    return (db.get("gw_base").strip() or DEFAULT_BASE).rstrip("/")
+
+
+def _token():
+    return db.get("gw_token").strip()
 
 
 def configured():
-    return bool(db.get("gw_base").strip() and db.get("gw_token").strip())
+    return bool(_token())
 
 
-def _url(path_key):
-    base = db.get("gw_base").strip().rstrip("/")
-    path = db.get(path_key).strip()
-    if path and not path.startswith("/"):
-        path = "/" + path
-    return base + path
+def gateway_name():
+    return "fampay" if db.get("gw_gateway") == "fampay" else "paytm"
 
 
-def _headers():
-    t = db.get("gw_token").strip()
-    return {"Authorization": "Bearer " + t, "X-API-Key": t, "Content-Type": "application/json", "Accept": "application/json"}
+def _h():
+    return {"X-API-Key": _token(), "Content-Type": "application/json", "Accept": "application/json"}
 
 
-def _pick(d, *names):
-    """find first matching key in dict (also looks inside 'data' / 'result')"""
-    if not isinstance(d, dict):
-        return ""
-    for scope in (d, d.get("data"), d.get("result")):
-        if isinstance(scope, dict):
-            for n in names:
-                v = scope.get(n)
-                if v not in (None, "", {}):
-                    return v
-    return ""
+def _err(r, j):
+    msg = ""
+    if isinstance(j, dict):
+        msg = str(j.get("error") or j.get("message") or "")
+    if r.status_code == 401:
+        return "Invalid API token."
+    if r.status_code == 403:
+        return msg or "Gateway not included in your plan / limit reached."
+    if r.status_code == 429:
+        return "Too many requests, try again in a minute."
+    if r.status_code >= 500:
+        return "Gateway could not reach the payment provider, try again shortly."
+    return msg or f"Gateway error (HTTP {r.status_code})"
 
 
-def create(pay_no, amount, user, return_url, webhook_url):
-    """Create an order on the gateway.
-    Returns {"ok": bool, "upi_uri": str, "pay_url": str, "ref": str, "err": str}"""
-    # <<< ADJUST HERE >>>  request body sent to your gateway
-    body = {
-        "order_id": pay_no,
-        "amount": round(float(amount), 2),
-        "customer_name": user["name"],
-        "customer_mobile": user["phone"] or "",
-        "customer_id": str(user["id"]),
-        "redirect_url": return_url,
-        "callback_url": webhook_url,
-        "webhook_url": webhook_url,
-        "remark": "RG " + pay_no,
-    }
+def create(pay_no, amount, user, return_url="", webhook_url=""):
+    """Create a UPI QR payment. Returns
+    {"ok", "upi_uri", "pay_url", "ref", "pay_amount", "err"}   pay_amount = EXACT amount the customer must pay (FamPay may add paise)"""
+    body = {"amount": round(float(amount), 2), "order_id": pay_no, "gateway": gateway_name(),
+            "customer": {"name": user["name"], "telegram_id": str(user["id"])}}
     try:
-        r = requests.post(_url("gw_create_path"), headers=_headers(), data=json.dumps(body), timeout=25)
+        r = requests.post(_base() + "/api/v1/payment/create", headers=_h(), json=body, timeout=25)
         try:
             j = r.json()
         except Exception:
             return {"ok": False, "err": f"Gateway replied HTTP {r.status_code} (not JSON)"}
     except Exception as e:
-        return {"ok": False, "err": "Gateway not reachable: " + str(e)[:120]}
-    # <<< ADJUST HERE >>>  field names read from your gateway's reply
-    upi = _pick(j, "upi_uri", "upi_url", "upi_link", "intent_url", "upi_intent", "qr_string", "qr_data")
-    pay_url = _pick(j, "payment_url", "pay_url", "checkout_url", "link", "url", "payment_link")
-    ref = _pick(j, "gateway_order_id", "reference", "ref", "transaction_id", "txn_id", "order_id", "id")
-    st = str(_pick(j, "status")).lower()
-    ok_flag = j.get("success", j.get("ok", None)) if isinstance(j, dict) else None
-    if (ok_flag is False) or st in FAIL_WORDS or not (upi or pay_url):
-        msg = _pick(j, "message", "error", "msg", "detail") or "Gateway did not return a payment link"
-        return {"ok": False, "err": str(msg)[:160]}
-    return {"ok": True, "upi_uri": str(upi) if str(upi).lower().startswith("upi:") else "",
-            "pay_url": str(pay_url), "ref": str(ref), "err": ""}
+        return {"ok": False, "err": "Gateway not reachable: " + str(e)[:100]}
+    if r.status_code >= 300 or not isinstance(j, dict) or not j.get("success"):
+        return {"ok": False, "err": _err(r, j)}
+    upi = str(j.get("upi_uri") or "")
+    pay_url = str(j.get("payment_url") or "")
+    if not (upi or pay_url):
+        return {"ok": False, "err": "Gateway did not return a QR."}
+    try:
+        pa = float(j.get("amount") or amount)
+    except (TypeError, ValueError):
+        pa = float(amount)
+    return {"ok": True, "upi_uri": upi, "pay_url": pay_url, "ref": str(j.get("pay_id") or ""), "pay_amount": pa, "err": ""}
 
 
 def check(pay_no):
-    """Ask the gateway if the order is paid. Returns ("paid"|"pending"|"failed", txn_id)"""
-    # <<< ADJUST HERE >>>  how your gateway is asked for order status
+    """Ask the gateway. Returns ("paid"|"pending"|"failed", txn_id, amount). Only SUCCESS means paid."""
     try:
-        r = requests.get(_url("gw_check_path"), headers=_headers(), params={"order_id": pay_no}, timeout=20)
+        r = requests.get(_base() + "/api/verify.php", headers=_h(), params={"order_id": pay_no}, timeout=20)
         j = r.json()
     except Exception:
-        return "pending", ""
-    st = str(_pick(j, "status", "payment_status", "state", "txn_status")).lower()
-    txn = str(_pick(j, "utr", "txn_id", "transaction_id", "bank_rrn", "rrn", "payment_id", "reference") or "")
-    if st in PAID_WORDS:
-        return "paid", txn
-    if st in FAIL_WORDS:
-        return "failed", txn
-    return "pending", txn
+        return "pending", "", 0.0
+    if not isinstance(j, dict):
+        return "pending", "", 0.0
+    st = str(j.get("status") or "").lower()
+    d = j.get("data") if isinstance(j.get("data"), dict) else {}
+    if st == "success":
+        try:
+            amt = float(d.get("amount") or 0)
+        except (TypeError, ValueError):
+            amt = 0.0
+        return "paid", str(d.get("utr") or d.get("transaction_id") or ""), amt
+    if st in ("failed", "expired"):
+        return "failed", "", 0.0
+    return "pending", "", 0.0
+
+
+def connect_test():
+    """Used by the 'Save & Connect' button. Returns (ok, message)."""
+    if not _token():
+        return False, "Paste the API token first."
+    try:
+        r = requests.get(_base() + "/api/verify.php", headers=_h(), params={"order_id": "RG-CONNECT-TEST"}, timeout=20)
+    except Exception as e:
+        return False, "Cannot reach the gateway at " + _base() + " : " + str(e)[:100]
+    try:
+        j = r.json()
+    except Exception:
+        j = {}
+    if r.status_code == 401:
+        return False, "Invalid API token."
+    if r.status_code == 403:
+        return False, _err(r, j)
+    if r.status_code == 429:
+        return False, "Gateway is rate limiting, press Connect again in a minute."
+    if r.status_code >= 500:
+        return False, f"Gateway error (HTTP {r.status_code})."
+    return True, f"Connected successfully! Gateway: {gateway_name().upper()} · {_base()}"
+
+
+def verify_signature(secret, ts, sig, raw_body):
+    """X-Payment-Gateway-Signature = sha256=HMAC_SHA256(secret, ts + '.' + rawBody)"""
+    try:
+        if abs(time.time() - int(ts)) > 300:
+            return False
+    except (TypeError, ValueError):
+        return False
+    exp = "sha256=" + hmac.new(secret.encode(), (str(ts) + "." + raw_body).encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(exp, sig or "")
