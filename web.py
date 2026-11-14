@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 from jinja2 import DictLoader
 import io, csv, threading
 import json
-import db, bot, backup, gateway
+import db, bot, backup, gateway, panel
 try:
     import segno
 except Exception:
@@ -52,7 +52,7 @@ td,th{padding:8px;border-bottom:1px solid var(--line);text-align:left;vertical-a
 </style></head><body>
 {% if session.get('ok') %}<nav>
 <a href="/" class="{{ 'on' if tab=='home' }}">Dashboard</a><a href="/emojis" class="{{ 'on' if tab=='emojis' }}">Premium Emoji</a>
-<a href="/products" class="{{ 'on' if tab=='products' }}">Products</a><a href="/deposits" class="{{ 'on' if tab=='deposits' }}">Deposits</a><a href="/payments" class="{{ 'on' if tab=='payments' }}">QR Payments</a><a href="/find" class="{{ 'on' if tab=='find' }}">Find Order</a><a href="/coupons" class="{{ 'on' if tab=='coupons' }}">Coupons</a>
+<a href="/products" class="{{ 'on' if tab=='products' }}">Products</a><a href="/panel" class="{{ 'on' if tab=='panel' }}">Panel API</a><a href="/deposits" class="{{ 'on' if tab=='deposits' }}">Deposits</a><a href="/payments" class="{{ 'on' if tab=='payments' }}">QR Payments</a><a href="/find" class="{{ 'on' if tab=='find' }}">Find Order</a><a href="/coupons" class="{{ 'on' if tab=='coupons' }}">Coupons</a>
 <a href="/orders" class="{{ 'on' if tab=='orders' }}">Orders</a><a href="/users" class="{{ 'on' if tab=='users' }}">Users</a>
 <a href="/broadcast" class="{{ 'on' if tab=='broadcast' }}">Broadcast</a><a href="/backup" class="{{ 'on' if tab=='backup' }}">Backup</a>
 <a href="/settings" class="{{ 'on' if tab=='settings' }}">Settings</a>
@@ -74,17 +74,21 @@ HOME = """{% extends 'base.html' %}{% block body %}<h1>Dashboard</h1><div class=
 
 EMOJIS = """{% extends 'base.html' %}{% block body %}<h1>Premium Emoji</h1>
 <div class="card"><p class="mu"><b>How to get an emoji ID:</b> open the bot with your admin Telegram account (Premium) and send any premium emoji as a message.
-The bot replies with the ID. Paste it below. Leave blank to use the normal emoji. Changes apply in a few seconds.</p></div>
+The bot replies with the ID. Paste it in the slot you want. Leave blank to use the normal emoji. <b>Every button / line has its own slot</b> - changing one never changes another.
+Emoji for products and plans are set in the <a class="lk" href="/products">Products</a> page.</p></div>
 <div class="card"><h3>Premium emoji check</h3><p>Status: <b class="{{ 'no' if gs('emoji_mode')=='blocked' else 'ok' }}">{{ 'BLOCKED by Telegram (normal emoji shown)' if gs('emoji_mode')=='blocked' else 'enabled' }}</b></p>
 <p class="mu">Sends one test message to your admin Telegram and tells you exactly why premium emoji do or do not show. You can also send /emojitest to the bot.</p>
-<form method="post" action="/emojis/test"><input type="hidden" name="csrf" value="{{ csrf() }}"><button>Test premium emoji now</button></form></div>
-<form method="post" action="/emojis"><input type="hidden" name="csrf" value="{{ csrf() }}"><div class="card tw"><table>
+<form method="post" action="/emojis/test" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf() }}"><button>Test premium emoji now</button></form>
+<form method="post" action="/emojis/preview" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf() }}"><button>Send main menu / shop / referral / tutorial to my Telegram</button></form></div>
+<form method="post" action="/emojis"><input type="hidden" name="csrf" value="{{ csrf() }}">
+{% for title, rows in groups %}<details class="card" {{ 'open' if loop.index == 1 }}><summary style="cursor:pointer;font-weight:600">{{ title }} <span class="mu">({{ rows|length }})</span></summary><div class="tw" style="margin-top:10px"><table>
 <tr><th>Used in</th><th>Normal emoji</th><th>Premium emoji ID</th><th></th></tr>
-{% for e in rows %}<tr><td>{{ e.note }}<br><span class="mu">{{ e.k }}</span></td>
+{% for e in rows %}<tr><td>{{ e.note }}</td>
 <td><input name="fb_{{ e.k }}" value="{{ e.fallback }}" style="width:70px"></td>
-<td><input name="id_{{ e.k }}" value="{{ e.eid }}" placeholder="e.g. 5368324170671202286"></td>
+<td><input name="id_{{ e.k }}" value="{{ e.eid }}" placeholder="e.g. 5368324170671202286" inputmode="numeric" autocomplete="off"></td>
 <td><a class="mu" href="/emojis/clear/{{ e.k }}" onclick="return confirm('Remove premium ID?')">clear</a></td></tr>{% endfor %}
-</table><button>Save all</button></div></form>{% endblock %}"""
+</table></div></details>{% endfor %}
+<button>Save all</button></form>{% endblock %}"""
 
 SETTINGS = """{% extends 'base.html' %}{% block body %}<h1>Settings</h1><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}">
 <div class="card"><h3>Store</h3><label>Shop name (main menu title)</label><input name="shop_name" value="{{ gs('shop_name') }}">
@@ -115,6 +119,14 @@ SETTINGS = """{% extends 'base.html' %}{% block body %}<h1>Settings</h1><form me
 <button type="submit" formaction="/gateway/connect">Save &amp; Connect</button>
 <p class="mu">Status: <b class="{{ 'ok' if gs('gw_connected')=='1' else 'no' }}">{{ 'Connected' if gs('gw_connected')=='1' else ('Token saved - press Save & Connect' if gw_on() else 'Not connected') }}</b><br>
 Webhook URL to set in your gateway: <code>{{ webhook_url() }}</code></p></div>
+<div class="card"><h3>Admin notifications</h3>
+<p class="mu">You get a Telegram message for every new purchase, wallet top-up, failed key delivery and new verified user. Each message has a <b>Contact User</b> button.</p>
+<label>Send notifications to (chat ID of a group / channel - empty = your admin Telegram)</label><input name="notify_chat" value="{{ gs('notify_chat') }}" placeholder="e.g. -1001234567890">
+<label>New purchase (user or reseller)</label><select name="notify_purchase"><option value="1" {{ 'selected' if gs('notify_purchase')!='0' }}>ON</option><option value="0" {{ 'selected' if gs('notify_purchase')=='0' }}>OFF</option></select>
+<label>Wallet balance added</label><select name="notify_topup"><option value="1" {{ 'selected' if gs('notify_topup')!='0' }}>ON</option><option value="0" {{ 'selected' if gs('notify_topup')=='0' }}>OFF</option></select>
+<label>Key delivery failed</label><select name="notify_fail"><option value="1" {{ 'selected' if gs('notify_fail')!='0' }}>ON</option><option value="0" {{ 'selected' if gs('notify_fail')=='0' }}>OFF</option></select>
+<label>New user verified</label><select name="notify_newuser"><option value="1" {{ 'selected' if gs('notify_newuser')!='0' }}>ON</option><option value="0" {{ 'selected' if gs('notify_newuser')=='0' }}>OFF</option></select>
+<button type="submit" formaction="/notifications/test">Send sample messages to my Telegram</button></div>
 <div class="card"><h3>Store screen &amp; sign-up</h3>
 <label>Phone number verification at /start</label><select name="verify_on"><option value="1" {{ 'selected' if gs('verify_on')!='0' }}>ON (ask phone number)</option><option value="0" {{ 'selected' if gs('verify_on')=='0' }}>OFF (no phone needed)</option></select>
 <label>Shop screen lines (one per line, shown under "Product Lineup")</label><textarea name="shop_bullets" rows="5">{{ gs('shop_bullets') }}</textarea></div>
@@ -138,24 +150,33 @@ USERS = """{% extends 'base.html' %}{% block body %}<h1>Users</h1><form class="r
 
 PRODUCTS = """{% extends 'base.html' %}{% block body %}<h1>Products</h1>
 <p><a class="lk" href="/products/new"><button type="button">+ Add product</button></a></p>
-<div class="card tw"><table><tr><th>Name</th><th>Plans</th><th>Stock</th><th>Status</th><th></th></tr>
-{% for p in rows %}<tr><td><a class="lk" href="/products/{{ p.id }}">{{ p.name }}</a></td><td>{{ p.nplans }}</td><td>{{ p.stock }}</td>
+<div class="card"><h3>Premium emoji for products &amp; plans</h3>
+<p class="mu">Paste a premium emoji ID (send the emoji to the bot to get it). <b>One emoji for all products</b> / <b>one emoji for all plans</b> is used everywhere automatically.
+An emoji set on a single product (open the product) wins over the "all products" emoji.</p>
+<form method="post" action="/products/emoji"><input type="hidden" name="csrf" value="{{ csrf() }}">
+<label>One emoji for ALL products</label><input name="emoji_all_products" value="{{ gs('emoji_all_products') }}" inputmode="numeric" placeholder="premium emoji ID" autocomplete="off">
+<label>One emoji for ALL plans (A to Z)</label><input name="emoji_all_plans" value="{{ gs('emoji_all_plans') }}" inputmode="numeric" placeholder="premium emoji ID" autocomplete="off">
+<button name="a" value="save">Save</button>
+<button name="a" value="apply" class="red" onclick="return confirm('Remove every single-product emoji so the ONE emoji is used for all products?')">Save &amp; use for ALL products</button></form></div>
+<div class="card tw"><table><tr><th>Name</th><th>Plans</th><th>Stock</th><th>Emoji ID</th><th>Status</th><th></th></tr>
+{% for p in rows %}<tr><td><a class="lk" href="/products/{{ p.id }}">{{ p.name }}</a></td><td>{{ p.nplans }}</td><td>{{ 'API (auto)' if p.stock >= 999999 else p.stock }}</td><td class="mu">{{ p.emoji_id or ('(all-products emoji)' if gs('emoji_all_products') else '-') }}</td>
 <td>{{ 'Visible' if p.active else 'Hidden' }}</td><td><a class="lk" href="/products/{{ p.id }}">Open</a></td></tr>{% endfor %}</table></div>{% endblock %}"""
 
 PRODUCT = """{% extends 'base.html' %}{% block body %}<h1>{{ p.name }}</h1>
-<div class="card"><h3>Product</h3><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="edit">
+<div class="card"><h3>Product</h3>{% if p.api_pid %}<p class="mu">Connected to panel product <b>#{{ p.api_pid }}</b> - keys are bought from the panel automatically. Prices follow the Panel API percentages unless you edit a price by hand.</p>{% endif %}<form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="edit">
 <label>Name</label><input name="name" value="{{ p.name }}"><label>Description</label><input name="descr" value="{{ p.descr }}">
 <label>Update group link (Join Telegram button after purchase)</label><input name="link" value="{{ p.link or '' }}" placeholder="https://t.me/yourgroup">
+<label>Premium emoji ID for THIS product (empty = use the "all products" emoji)</label><input name="emoji_id" value="{{ p.emoji_id or '' }}" inputmode="numeric" placeholder="premium emoji ID" autocomplete="off">
 <label>Sort order (small = first)</label><input name="sort" value="{{ p.sort }}">
 <label>Visibility</label><select name="active"><option value="1" {{ 'selected' if p.active }}>Visible</option><option value="0" {{ 'selected' if not p.active }}>Hidden</option></select>
 <button>Save</button></form>
 <form method="post" onsubmit="return confirm('Delete this product, its plans and unsold keys?')"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="del"><button class="red">Delete product</button></form></div>
-<div class="card tw"><h3>Plans (prices in INR)</h3><table><tr><th>Duration</th><th>User price</th><th>Reseller price</th><th>Show</th><th>Stock / Sold</th><th></th></tr>
+<div class="card tw"><h3>Plans (prices in INR)</h3><table><tr><th>Duration</th><th>Panel cost</th><th>User price</th><th>Reseller price</th><th>Show</th><th>Stock / Sold</th><th></th></tr>
 {% for pl in plans %}<tr><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="plan_id" value="{{ pl.id }}">
-<td>{% set pp_ = pl.name|pp %}{% if pp_ %}<input name="dur" value="{{ pp_[0] }}" style="width:70px"> <select name="unit" style="width:90px"><option value="hours" {{ 'selected' if pp_[1]=='hours' }}>Hours</option><option value="days" {{ 'selected' if pp_[1]=='days' }}>Days</option></select>{% else %}<input name="name" value="{{ pl.name }}">{% endif %}</td><td><input name="price" value="{{ pl.price }}" style="width:80px"></td><td><input name="rprice" value="{{ pl.rprice }}" style="width:80px"></td>
+<td>{% set pp_ = pl.name|pp %}{% if pp_ %}<input name="dur" value="{{ pp_[0] }}" style="width:70px"> <select name="unit" style="width:90px"><option value="hours" {{ 'selected' if pp_[1]=='hours' }}>Hours</option><option value="days" {{ 'selected' if pp_[1]=='days' }}>Days</option></select>{% else %}<input name="name" value="{{ pl.name }}">{% endif %}</td><td class="mu">{% if pl.api_plan_id %}₹{{ '%.2f'|format(pl.base_price) }}<br>API #{{ pl.api_plan_id }}{% else %}-{% endif %}</td><td><input name="price" value="{{ pl.price }}" style="width:80px"></td><td><input name="rprice" value="{{ pl.rprice }}" style="width:80px"></td>
 <td><select name="active"><option value="1" {{ 'selected' if pl.active }}>Yes</option><option value="0" {{ 'selected' if not pl.active }}>No</option></select></td>
-<td>{{ pl.stock }} / {{ pl.sold }}<br><a class="lk" href="/plans/{{ pl.id }}">Manage keys</a></td>
-<td><button name="a" value="saveplan" style="margin:0">Save</button> <button name="a" value="delplan" class="red" style="margin:0" onclick="return confirm('Delete plan and unsold keys?')">X</button></td></form></tr>{% endfor %}</table></div>
+<td>{% if pl.api_plan_id %}auto / {{ pl.sold }}<br><span class="mu">{{ 'price: manual' if pl.manual else 'price: auto' }}</span>{% else %}{{ pl.stock }} / {{ pl.sold }}<br><a class="lk" href="/plans/{{ pl.id }}">Manage keys</a>{% endif %}</td>
+<td><button name="a" value="saveplan" style="margin:0">Save</button> {% if pl.api_plan_id and pl.manual %}<button name="a" value="autoprice" style="margin:0" title="go back to the automatic % price">Auto</button> {% endif %}<button name="a" value="delplan" class="red" style="margin:0" onclick="return confirm('Delete plan and unsold keys?')">X</button></td></form></tr>{% endfor %}</table></div>
 <div class="card"><h3>Add plans</h3><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="addplans">
 <div id="rows"></div><button type="button" onclick="addRow()" style="margin:6px 0">+ Add another plan</button>
 <script>function addRow(){var d=document.createElement('div');d.className='row';d.style.cssText='flex-wrap:wrap;gap:6px;margin:8px 0';
@@ -205,9 +226,11 @@ PAYMENTS = '{% extends \'base.html\' %}{% block body %}<h1>QR / Manual Payments<
 COUPONS = '{% extends \'base.html\' %}{% block body %}<h1>Coupons</h1>\n<div class="card"><h3>Create coupon</h3><p class="mu">A coupon gives a discount on one purchase. Each user can use a coupon once.</p>\n<form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="add">\n<label>Code (letters/numbers)</label><input name="code" required placeholder="RG50">\n<label>Type</label><select name="kind"><option value="percent">Percent off (%)</option><option value="flat">Flat off (INR)</option></select>\n<label>Value</label><input name="value" required placeholder="10">\n<label>Max total uses (0 = unlimited)</label><input name="max_uses" value="0">\n<label>Valid for days (0 = no expiry)</label><input name="days" value="0"><button>Create coupon</button></form></div>\n<div class="card tw"><table><tr><th>Code</th><th>Discount</th><th>Used</th><th>Expires</th><th>Status</th><th></th></tr>\n{% for c in rows %}<tr><td><b>{{ c.code }}</b></td><td>{{ (c.value|string + \'%\') if c.kind==\'percent\' else (\'₹\' + c.value|string) }}</td><td>{{ c.used }} / {{ c.max_uses or \'∞\' }}</td>\n<td>{{ c.expires|ts if c.expires else \'never\' }}</td><td>{{ \'Active\' if c.active else \'Off\' }}</td>\n<td><form method="post" class="row"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="code" value="{{ c.code }}">\n<button name="a" value="toggle" style="margin:0">{{ \'Turn off\' if c.active else \'Turn on\' }}</button><button name="a" value="del" class="red" style="margin:0" onclick="return confirm(\'Delete coupon?\')">Delete</button></form></td></tr>{% endfor %}</table></div>{% endblock %}'
 PAYPAGE = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">\n<title>{{ shop }} · Payment</title><style>\n*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,#1b2a4a 0,#0a0e17 55%);color:#eaf0ff;font-family:system-ui,Segoe UI,Roboto,sans-serif;display:flex;justify-content:center;padding:18px}\n.card{width:100%;max-width:410px;background:#111827;border:1px solid #223049;border-radius:20px;padding:22px;box-shadow:0 20px 60px #0008;align-self:flex-start;margin-top:10px}\n.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.shop{font-weight:700;font-size:16px}.sec{font-size:12px;color:#7ee0a0;background:#12301f;padding:4px 10px;border-radius:99px}\n.amt{text-align:center;margin:10px 0 4px;font-size:38px;font-weight:800}.sub{text-align:center;color:#8b96b3;font-size:13px;margin-bottom:14px}\n.qr{background:#fff;border-radius:16px;padding:14px;width:240px;height:240px;margin:0 auto;display:flex;align-items:center;justify-content:center}.qr svg{width:100%;height:100%}\n.row{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #1d2940;font-size:14px}.row span:first-child{color:#8b96b3}.row b{text-align:right;word-break:break-all}\n.btn{display:block;text-align:center;text-decoration:none;background:#3b82f6;color:#fff;padding:13px;border-radius:12px;font-weight:600;margin-top:16px}.btn.g{background:#16a34a}\n.wait{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:16px;color:#ffd166;font-size:14px}.dot{width:10px;height:10px;border-radius:50%;background:#ffd166;animation:p 1s infinite}@keyframes p{50%{opacity:.25}}\n.tm{text-align:center;color:#8b96b3;font-size:13px;margin-top:8px}.ok{width:84px;height:84px;border-radius:50%;background:#16a34a;margin:6px auto 14px;display:flex;align-items:center;justify-content:center;animation:pop .5s}\n@keyframes pop{0%{transform:scale(.3);opacity:0}100%{transform:scale(1);opacity:1}}.ok svg{width:46px;height:46px}.big{text-align:center;font-size:22px;font-weight:800}.bad{background:#dc2626}\n.mu{color:#8b96b3;font-size:12px;text-align:center;margin-top:14px}\n</style></head><body><div class="card">\n<div class="top"><div class="shop">{{ shop }}</div><div class="sec">🔒 Secure UPI</div></div>\n{% if p.status == \'paid\' %}\n<div class="ok"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg></div>\n<div class="big">Payment Successful</div><div class="sub">{{ sym }}{{ \'%.2f\'|format(p.pay_amount or p.amount) }} received</div>\n<div class="row"><span>Order ID</span><b>{{ p.pay_no }}</b></div>\n<div class="row"><span>Transaction ID</span><b>{{ p.txn or \'-\' }}</b></div>\n<div class="row"><span>{{ \'Wallet\' if p.kind==\'topup\' else \'Item\' }}</span><b>{{ \'Recharge added to wallet\' if p.kind==\'topup\' else p.title }}</b></div>\n<div class="row"><span>Paid on</span><b>{{ p.paid_at|ts }} IST</b></div>\n<div class="row"><span>Status</span><b style="color:#4ade80">SUCCESS</b></div>\n<p class="sub" style="margin-top:14px">{{ \'Your wallet balance is updated.\' if p.kind==\'topup\' else \'Your key has been sent in Telegram.\' }}</p>\n{% if bot_user %}<a class="btn g" href="https://t.me/{{ bot_user }}">Back to Telegram</a>{% endif %}\n{% elif p.status in (\'expired\',\'cancelled\') %}\n<div class="ok bad"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></div>\n<div class="big">Payment {{ \'Expired\' if p.status==\'expired\' else \'Cancelled\' }}</div><div class="sub">Order {{ p.pay_no }}<br>If you already paid, it will be added automatically.</div>\n{% if bot_user %}<a class="btn" href="https://t.me/{{ bot_user }}">Back to Telegram</a>{% endif %}\n{% else %}\n<div class="amt">{{ sym }}{{ \'%.2f\'|format(p.pay_amount or p.amount) }}</div><div class="sub">{{ p.title }}</div>\n<div class="qr">{{ qr|safe if qr else \'QR not available\' }}</div>\n<div class="tm">Expires in <b id="t">--:--</b></div>\n<div class="wait"><span class="dot"></span> Waiting for payment…</div>\n{% if p.upi_uri %}<a class="btn" href="{{ p.upi_uri }}">Pay with UPI App</a>{% elif p.pay_url %}<a class="btn" href="{{ p.pay_url }}">Open payment link</a>{% endif %}\n<div class="row" style="margin-top:14px"><span>Order ID</span><b>{{ p.pay_no }}</b></div>\n<p class="mu">Scan with PhonePe, Google Pay, Paytm or any UPI app.<br>Do not close this page — it updates automatically.</p>\n<script>var left={{ left }};function f(){var m=Math.floor(left/60),s=left%60;document.getElementById(\'t\').textContent=(m<10?\'0\':\'\')+m+\':\'+(s<10?\'0\':\'\')+s;if(left<=0){location.reload();return}left--}f();setInterval(f,1000);\nsetInterval(function(){fetch(\'status\').then(function(r){return r.json()}).then(function(j){if(j.status!==\'pending\')location.reload()}).catch(function(){})},3000);</script>\n{% endif %}\n</div></body></html>'
 
-NEWPRODUCT = '{% extends \'base.html\' %}{% block body %}<h1>Add product</h1>\n<div class="card"><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}">\n<label>Product name</label><input name="name" required placeholder="e.g. Br Mods Pc Emulator">\n<label>Update group link (Join Telegram button after purchase) - optional</label><input name="link" placeholder="https://t.me/yourgroup">\n<h3>Plans</h3><p class="mu">Duration + Hours/Days, then User price and Reseller price (INR). Press <b>+ Add another plan</b> for more. Reseller price empty = same as user price.</p>\n<div id="rows"></div><button type="button" onclick="addRow()" style="margin:6px 0">+ Add another plan</button>\n<script>function addRow(){var d=document.createElement(\'div\');d.className=\'row\';d.style.cssText=\'flex-wrap:wrap;gap:6px;margin:8px 0\';\nd.innerHTML=\'<input name="dur" type="number" min="1" step="1" placeholder="Duration" style="width:95px;flex:none" required><select name="unit" style="width:95px;flex:none"><option value="hours">Hours</option><option value="days" selected>Days</option></select><input name="uprice" placeholder="User price" style="width:110px;flex:none" required><input name="rprice" placeholder="Reseller price" style="width:125px;flex:none"><button type="button" class="red" style="margin:0" onclick="this.parentNode.remove()">X</button>\';\ndocument.getElementById(\'rows\').appendChild(d)}addRow();</script>\n<button>Save product</button></form></div>{% endblock %}'
+NEWPRODUCT = '{% extends \'base.html\' %}{% block body %}<h1>Add product</h1>\n<div class="card"><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}">\n<label>Product name</label><input name="name" required placeholder="e.g. Br Mods Pc Emulator">\n<label>Update group link (Join Telegram button after purchase) - optional</label><input name="link" placeholder="https://t.me/yourgroup">\n<label>Premium emoji ID for this product - optional</label><input name="emoji_id" inputmode="numeric" placeholder="premium emoji ID">\n<h3>Plans</h3><p class="mu">Duration + Hours/Days, then User price and Reseller price (INR). Press <b>+ Add another plan</b> for more. Reseller price empty = same as user price.</p>\n<div id="rows"></div><button type="button" onclick="addRow()" style="margin:6px 0">+ Add another plan</button>\n<script>function addRow(){var d=document.createElement(\'div\');d.className=\'row\';d.style.cssText=\'flex-wrap:wrap;gap:6px;margin:8px 0\';\nd.innerHTML=\'<input name="dur" type="number" min="1" step="1" placeholder="Duration" style="width:95px;flex:none" required><select name="unit" style="width:95px;flex:none"><option value="hours">Hours</option><option value="days" selected>Days</option></select><input name="uprice" placeholder="User price" style="width:110px;flex:none" required><input name="rprice" placeholder="Reseller price" style="width:125px;flex:none"><button type="button" class="red" style="margin:0" onclick="this.parentNode.remove()">X</button>\';\ndocument.getElementById(\'rows\').appendChild(d)}addRow();</script>\n<button>Save product</button></form></div>{% endblock %}'
 FIND = '{% extends \'base.html\' %}{% block body %}<h1>Find order</h1>\n<form class="row" method="get"><input name="q" value="{{ q }}" placeholder="Order ID (ORD… / WAL…), transaction ID or user ID" autofocus><button style="margin:0">Find user</button></form><br>\n{% if q and not hits %}<div class="card">Nothing found for <b>{{ q }}</b>.</div>{% endif %}\n{% for h in hits %}<div class="card"><h3>{{ h.kind }}</h3>\n<p><b>Order ID:</b> {{ h.ref }}</p>\n{% for k, v in h.info %}<p class="mu">{{ k }}: <b>{{ v }}</b></p>{% endfor %}\n<p><b>User:</b> {{ h.uname or \'-\' }} · <b>ID:</b> {{ h.uid }} · <b>Username:</b> {{ (\'@\' + h.username) if h.username else \'-\' }}<br><b>Phone:</b> {{ h.phone or \'-\' }} · <b>Wallet:</b> ₹{{ \'%.2f\'|format(h.balance) }}</p>\n<a class="lk" href="/users?q={{ h.uid }}">Open user</a></div>{% endfor %}{% endblock %}'
-app.jinja_loader = DictLoader({"find.html": FIND, "newproduct.html": NEWPRODUCT, "payments.html": PAYMENTS, "coupons.html": COUPONS, "backup.html": BACKUP, "broadcast.html": BROADCAST,"products.html": PRODUCTS, "product.html": PRODUCT, "plan.html": PLAN, "deposits.html": DEPOSITS, "orders.html": ORDERS,"base.html": BASE, "login.html": LOGIN, "home.html": HOME, "emojis.html": EMOJIS, "settings.html": SETTINGS, "users.html": USERS})
+PANEL = '{% extends \'base.html\' %}{% block body %}<h1>Panel API</h1>\n<div class="card"><h3>1. Connect to your panel</h3>\n<p class="mu">Paste the API token of your main website and press <b>Save &amp; Connect</b>. You can change the token or the server URL any time.</p>\n<form method="post" action="/panel/connect"><input type="hidden" name="csrf" value="{{ csrf() }}">\n<label>Server URL</label><input name="panel_url" value="{{ gs(\'panel_url\') or default_url }}">\n<label>API token</label><input name="panel_token" value="{{ gs(\'panel_token\') }}" autocomplete="off" placeholder="paste API token">\n<button>Save &amp; Connect</button> <button type="submit" formaction="/panel/balance">Check Balance</button>\n<a class="lk" href="/panel/products"><button type="button">Show Products</button></a></form>\n<p class="mu">Status: <b class="{{ \'ok\' if gs(\'panel_connected\')==\'1\' else \'no\' }}">{{ \'Connected\' if gs(\'panel_connected\')==\'1\' else (\'Token saved - press Save & Connect\' if gs(\'panel_token\') else \'Not connected\') }}</b></p></div>\n<div class="card"><h3>2. Your prices (percentage on the panel price)</h3>\n<p class="mu">Every product you add gets its prices automatically: <b>panel price + your %</b>. Change the % and press <b>Save &amp; apply</b> - all products are updated at once, no need to edit each price.</p>\n<form method="post" action="/panel/markup"><input type="hidden" name="csrf" value="{{ csrf() }}">\n<label>Reseller % (reseller price = panel price + this %)</label><input name="mk_reseller" value="{{ rp }}">\n<label>User % (user price = panel price + this %)</label><input name="mk_user" value="{{ up }}">\n<p class="mu">Example: panel price ₹100 &rarr; reseller <b>₹{{ \'%.2f\'|format(ex_r) }}</b> &middot; user <b>₹{{ \'%.2f\'|format(ex_u) }}</b></p>\n<button name="a" value="save">Save %</button>\n<button name="a" value="apply" class="red" onclick="return confirm(\'Recalculate the price of ALL panel products with these percentages? Prices you edited by hand are overwritten too.\')">Save &amp; apply to ALL products</button></form></div>\n<div class="card"><h3>3. Your panel products</h3>\n<p class="mu">In the shop: <b>{{ np }}</b> panel product(s), <b>{{ nl }}</b> plan(s). Press <b>Show Products</b> above to see everything on your panel and add the ones you want (or all).</p>\n<form method="post" action="/panel/auto"><input type="hidden" name="csrf" value="{{ csrf() }}">\n<label>Auto price sync (keeps panel prices up to date, then applies your %)</label>\n<select name="panel_autosync"><option value="1" {{ \'selected\' if gs(\'panel_autosync\')!=\'0\' }}>ON</option><option value="0" {{ \'selected\' if gs(\'panel_autosync\')==\'0\' }}>OFF</option></select>\n<label>Sync every (minutes, 5 - 1440)</label><input name="panel_sync_min" value="{{ gs(\'panel_sync_min\') }}">\n<button>Save</button> <button type="submit" formaction="/panel/sync">Sync prices now</button></form>\n<p class="mu">Last sync: {{ (gs(\'panel_last_sync\')|int)|ts if gs(\'panel_last_sync\')|int else \'never\' }}</p></div>{% endblock %}'
+PANELPROD = '{% extends \'base.html\' %}{% block body %}<h1>Panel products</h1>\n<p class="mu"><a class="lk" href="/panel">&larr; back to Panel API</a> &middot; Percentages now: reseller <b>+{{ rp }}%</b>, user <b>+{{ up }}%</b></p>\n<form method="post" action="/panel/add"><input type="hidden" name="csrf" value="{{ csrf() }}">\n<div class="card"><button name="a" value="selected" style="margin:0">Add selected</button> <button name="a" value="all" class="red" style="margin:0" onclick="return confirm(\'Add ALL {{ rows|length }} products?\')">Add ALL products</button>\n<label style="margin-top:12px"><input type="checkbox" style="width:auto" onclick="document.querySelectorAll(\'.pc\').forEach(function(x){x.checked=this.checked}.bind(this))"> Select all</label></div>\n{% for r in rows %}<div class="card"><label style="margin:0;color:var(--tx);font-size:15px"><input class="pc" type="checkbox" name="pid" value="{{ r.id }}" style="width:auto"> <b>{{ r.name }}</b> <span class="mu">(panel #{{ r.id }})</span> {% if r.added %}<span class="bd ok">Added</span>{% endif %}</label>\n<div class="tw"><table><tr><th>Plan</th><th>Panel price</th><th>Reseller price</th><th>User price</th></tr>\n{% for pl in r.plans %}<tr><td>{{ pl.name }}</td><td>₹{{ \'%.2f\'|format(pl.base) }}</td><td>₹{{ \'%.2f\'|format(pl.res) }}</td><td>₹{{ \'%.2f\'|format(pl.usr) }}</td></tr>{% endfor %}</table></div></div>{% endfor %}\n{% if not rows %}<div class="card">No products found on the panel.</div>{% endif %}</form>{% endblock %}'
+app.jinja_loader = DictLoader({"panel.html": PANEL, "panelprod.html": PANELPROD, "find.html": FIND, "newproduct.html": NEWPRODUCT, "payments.html": PAYMENTS, "coupons.html": COUPONS, "backup.html": BACKUP, "broadcast.html": BROADCAST,"products.html": PRODUCTS, "product.html": PRODUCT, "plan.html": PLAN, "deposits.html": DEPOSITS, "orders.html": ORDERS,"base.html": BASE, "login.html": LOGIN, "home.html": HOME, "emojis.html": EMOJIS, "settings.html": SETTINGS, "users.html": USERS})
 
 
 def csrf():
@@ -295,23 +318,73 @@ def home():
 @app.route("/emojis", methods=["GET", "POST"])
 def emojis():
     if request.method == "POST":
+        used, dups = {}, []
         with db.conn() as c:
-            for r in c.execute("SELECT k FROM emojis").fetchall():
+            for r in c.execute("SELECT k, note FROM emojis").fetchall():
                 k = r["k"]
                 eid = request.form.get("id_" + k, "").strip()
                 if eid and not eid.isdigit():
                     continue
                 c.execute("UPDATE emojis SET eid=?, fallback=? WHERE k=?", (eid, request.form.get("fb_" + k, "").strip() or "▫️", k))
+                if eid:
+                    if eid in used:
+                        dups.append(f"{used[eid]}  =  {r['note']}")
+                    else:
+                        used[eid] = r["note"]
         db.put("emoji_mode", "ok")
         db.emoji_clear()
         with db.conn() as c:
             ids = [r["eid"] for r in c.execute("SELECT eid FROM emojis WHERE eid<>''")]
         bad = bot.emoji_invalid(ids)
-        flash("Saved" + (f" - but {len(bad)} ID(s) are not valid in Telegram: " + ", ".join(bad[:5]) if bad else ". Now press 'Test premium emoji now'."))
+        msg = "Saved" + (f" - but {len(bad)} ID(s) are not valid in Telegram: " + ", ".join(bad[:5]) if bad else ". Now press 'Test premium emoji now'.")
+        if dups:
+            msg += "\nNote - the SAME emoji ID is used in more than one place:\n" + "\n".join(dups[:8])
+        flash(msg)
         return redirect("/emojis")
     with db.conn() as c:
         rows = c.execute("SELECT * FROM emojis ORDER BY rowid").fetchall()
-    return page("emojis", rows=rows, tab="emojis")
+    byk = {r["k"]: r for r in rows}
+    groups, seen = [], set()
+    for title, keys in db.EMOJI_GROUPS:
+        seen.update(keys)
+        part = [byk[k] for k in keys if k in byk]
+        if part:
+            groups.append((title, part))
+    rest = [r for r in rows if r["k"] not in seen]
+    if rest:
+        groups.append(("Other", rest))
+    return page("emojis", groups=groups, tab="emojis")
+
+
+@app.route("/emojis/preview", methods=["POST"])
+def emoji_preview_route():
+    flash("Sent to your Telegram - check the bot chat." if bot.send_menu_preview() else "ADMIN_ID is not set.")
+    return redirect("/emojis")
+
+
+@app.route("/notifications/test", methods=["POST"])
+def notifications_test():
+    flash("Sample messages sent to your Telegram." if bot.send_samples() else "ADMIN_ID is not set.")
+    return redirect("/settings")
+
+
+@app.route("/products/emoji", methods=["POST"])
+def products_emoji():
+    f = request.form
+    for k in ("emoji_all_products", "emoji_all_plans"):
+        v = f.get(k, "").strip()
+        if v and not v.isdigit():
+            flash("Emoji ID must be digits only.")
+            return redirect("/products")
+        db.put(k, v)
+    if f.get("a") == "apply":
+        with db.conn() as c:
+            c.execute("UPDATE products SET emoji_id=''")
+        flash("Saved. All products now use the ONE emoji.")
+    else:
+        flash("Saved.")
+    db.emoji_clear()
+    return redirect("/products")
 
 
 @app.route("/emojis/test", methods=["POST"])
@@ -338,6 +411,8 @@ def settings():
                 if k in ("min_dep", "max_dep") and not v.isdigit():
                     continue
                 if k == "low_stock" and not v.isdigit():
+                    continue
+                if k == "notify_chat" and v and not v.lstrip("-").isdigit():
                     continue
                 if k == "pay_expire" and not (v.isdigit() and 1 <= int(v) <= 60):
                     continue
@@ -442,7 +517,8 @@ def product_new():
             flash("Enter the product name")
             return redirect("/products/new")
         with db.conn() as c:
-            cur = c.execute("INSERT INTO products(name,link) VALUES(?,?)", (name, f.get("link", "").strip()))
+            eid = f.get("emoji_id", "").strip()
+            cur = c.execute("INSERT INTO products(name,link,emoji_id) VALUES(?,?,?)", (name, f.get("link", "").strip(), eid if eid.isdigit() else ""))
             pid = cur.lastrowid
             for n, (pn, pr, rp) in enumerate(plans):
                 c.execute("INSERT INTO plans(product_id,name,price,rprice,sort) VALUES(?,?,?,?,?)", (pid, pn, pr, rp, n))
@@ -470,8 +546,12 @@ def product_page(pid):
         a, f = request.form.get("a"), request.form
         with db.conn() as c:
             if a == "edit":
-                c.execute("UPDATE products SET name=?, descr=?, link=?, active=?, sort=? WHERE id=?",
-                          (f.get("name", "").strip() or p["name"], f.get("descr", "").strip(), f.get("link", "").strip(), 1 if f.get("active") == "1" else 0, int(num(f.get("sort"))), pid))
+                eid = f.get("emoji_id", "").strip()
+                if eid and not eid.isdigit():
+                    eid = p["emoji_id"] or ""
+                    flash("Emoji ID must be digits only - emoji not changed")
+                c.execute("UPDATE products SET name=?, descr=?, link=?, active=?, sort=?, emoji_id=? WHERE id=?",
+                          (f.get("name", "").strip() or p["name"], f.get("descr", "").strip(), f.get("link", "").strip(), 1 if f.get("active") == "1" else 0, int(num(f.get("sort"))), eid, pid))
                 flash("Saved")
             elif a == "del":
                 c.execute("DELETE FROM keys WHERE used=0 AND plan_id IN (SELECT id FROM plans WHERE product_id=?)", (pid,))
@@ -491,9 +571,19 @@ def product_page(pid):
                 flash("Plan added")
             elif a == "saveplan":
                 pname = plan_name(f.get("dur"), f.get("unit")) if f.get("dur") else f.get("name", "").strip()
-                c.execute("UPDATE plans SET name=?, price=?, rprice=?, active=? WHERE id=? AND product_id=?",
-                          (pname or "Plan", num(f.get("price")), num(f.get("rprice")), 1 if f.get("active") == "1" else 0, int(f.get("plan_id", 0)), pid))
+                old = c.execute("SELECT price, rprice, api_plan_id, manual FROM plans WHERE id=? AND product_id=?", (int(f.get("plan_id", 0)), pid)).fetchone()
+                manual = old["manual"] if old else 0
+                if old and old["api_plan_id"] and (abs(num(f.get("price")) - old["price"]) > 0.001 or abs(num(f.get("rprice")) - old["rprice"]) > 0.001):
+                    manual = 1                      # price edited by hand: auto-sync will not overwrite it
+                c.execute("UPDATE plans SET name=?, price=?, rprice=?, active=?, manual=? WHERE id=? AND product_id=?",
+                          (pname or "Plan", num(f.get("price")), num(f.get("rprice")), 1 if f.get("active") == "1" else 0, manual, int(f.get("plan_id", 0)), pid))
                 flash("Plan saved")
+            elif a == "autoprice":
+                row = c.execute("SELECT base_price FROM plans WHERE id=? AND product_id=? AND api_plan_id>0", (int(f.get("plan_id", 0)), pid)).fetchone()
+                if row:
+                    up_, rp_ = panel.calc(row["base_price"])
+                    c.execute("UPDATE plans SET price=?, rprice=?, manual=0 WHERE id=?", (up_, rp_, int(f.get("plan_id", 0))))
+                    flash("Price is automatic again")
             elif a == "delplan":
                 plid = int(f.get("plan_id", 0))
                 c.execute("DELETE FROM keys WHERE plan_id=? AND used=0", (plid,))
@@ -777,3 +867,127 @@ def coupons():
     with db.conn() as c:
         rows = c.execute("SELECT * FROM coupons ORDER BY created DESC").fetchall()
     return page("coupons", rows=rows, tab="coupons")
+
+
+# ------------------------------------------------------------------ PART 10: Panel API
+def _panel_counts():
+    with db.conn() as c:
+        return (c.execute("SELECT COUNT(*) FROM products WHERE api_pid>0").fetchone()[0],
+                c.execute("SELECT COUNT(*) FROM plans WHERE api_plan_id>0").fetchone()[0])
+
+
+@app.route("/panel")
+def panel_page():
+    rp, up = panel.markups()
+    ex_u, ex_r = panel.calc(100, rp, up)
+    np_, nl = _panel_counts()
+    return page("panel", tab="panel", rp=rp, up=up, ex_r=ex_r, ex_u=ex_u, np=np_, nl=nl, default_url=panel.DEFAULT_URL)
+
+
+@app.route("/panel/connect", methods=["POST"])
+def panel_connect():
+    f = request.form
+    url = f.get("panel_url", "").strip().rstrip("/")
+    if url and not url.startswith("http"):
+        url = "https://" + url
+    db.put("panel_url", url or panel.DEFAULT_URL)
+    db.put("panel_token", f.get("panel_token", "").strip())
+    ok, msg = panel.connect_test()
+    db.put("panel_connected", "1" if ok else "0")
+    flash(("✅ " if ok else "❌ ") + msg)
+    return redirect("/panel")
+
+
+@app.route("/panel/balance", methods=["POST"])
+def panel_balance():
+    f = request.form
+    if f.get("panel_token", "").strip() and f.get("panel_token").strip() != db.get("panel_token"):
+        db.put("panel_token", f.get("panel_token").strip())      # token typed but not saved yet
+    try:
+        flash("💰 Panel balance: ₹%.2f" % panel.balance())
+    except panel.PanelError as e:
+        flash("❌ " + e.msg)
+    return redirect("/panel")
+
+
+@app.route("/panel/markup", methods=["POST"])
+def panel_markup():
+    f = request.form
+    try:
+        r, u = float(f.get("mk_reseller", "")), float(f.get("mk_user", ""))
+        if not (0 <= r <= 10000 and 0 <= u <= 10000):
+            raise ValueError
+    except ValueError:
+        flash("Enter the percentages as numbers (0 or more)")
+        return redirect("/panel")
+    db.put("panel_mk_reseller", ("%g" % r))
+    db.put("panel_mk_user", ("%g" % u))
+    if f.get("a") == "apply":
+        flash(f"Saved. Reseller +{r:g}% · User +{u:g}% applied to {panel.reprice_all(force=True)} plan(s).")
+    else:
+        flash("Percentages saved. New products use them. Press 'Save & apply to ALL products' to update the existing ones.")
+    return redirect("/panel")
+
+
+@app.route("/panel/auto", methods=["POST"])
+def panel_auto():
+    f = request.form
+    db.put("panel_autosync", "0" if f.get("panel_autosync") == "0" else "1")
+    v = f.get("panel_sync_min", "").strip()
+    if v.isdigit() and 5 <= int(v) <= 1440:
+        db.put("panel_sync_min", v)
+    flash("Saved")
+    return redirect("/panel")
+
+
+@app.route("/panel/sync", methods=["POST"])
+def panel_sync():
+    try:
+        ul, nl, miss = panel.sync_existing()
+        flash(f"✅ Synced: {ul} plan price(s) refreshed, {nl} new plan(s) added" + (f", ⚠️ {miss} plan(s) no longer on the panel (buying them will fail - hide them)" if miss else ""))
+    except panel.PanelError as e:
+        flash("❌ " + e.msg)
+    return redirect("/panel")
+
+
+@app.route("/panel/products")
+def panel_products():
+    try:
+        plist = panel.products()
+    except panel.PanelError as e:
+        flash("❌ " + e.msg)
+        return redirect("/panel")
+    with db.conn() as c:
+        have = {r["api_pid"] for r in c.execute("SELECT api_pid FROM products WHERE api_pid>0")}
+    rp, up = panel.markups()
+    rows = []
+    for p in plist:
+        try:
+            pid = int(p.get("product_id"))
+        except (TypeError, ValueError):
+            continue
+        pls = []
+        for pl in (p.get("plans") or []):
+            base = panel._f(pl.get("price"))
+            u_, r_ = panel.calc(base, rp, up)
+            pls.append({"name": pl.get("name"), "base": base, "usr": u_, "res": r_})
+        rows.append({"id": pid, "name": p.get("name") or f"Product {pid}", "plans": pls, "added": pid in have})
+    return page("panelprod", tab="panel", rows=rows, rp=("%g" % rp), up=("%g" % up))
+
+
+@app.route("/panel/add", methods=["POST"])
+def panel_add():
+    f = request.form
+    ids = None
+    if f.get("a") != "all":
+        ids = [int(x) for x in f.getlist("pid") if x.isdigit()]
+        if not ids:
+            flash("Select at least one product")
+            return redirect("/panel/products")
+    try:
+        np_, nl, ul = panel.import_products(ids)          # always read fresh from the panel
+    except panel.PanelError as e:
+        flash("❌ " + e.msg)
+        return redirect("/panel/products")
+    flash(f"✅ {np_} new product(s), {nl} new plan(s) added, {ul} existing plan(s) refreshed. Prices are set by your % automatically.")
+    return redirect("/products")

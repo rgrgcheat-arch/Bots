@@ -58,7 +58,79 @@ EMOJI_DEFAULTS = {
     "upi": ("💳", "Pay UPI button"),
     "binance": ("🟡", "Pay Binance button"),
     "local": ("🏦", "Pay Local (bKash/bank) button"),
+    # ---- V9: every button / line has its OWN slot (nothing is shared any more) ----
+    "b_shop": ("💥", "Menu button: Shop Now"),
+    "b_addbal": ("💰", "Menu button: Add Balance"),
+    "b_history": ("📜", "Menu button: All History"),
+    "b_profile": ("👤", "Menu button: My Profile"),
+    "b_referral": ("🔗", "Menu button: Referral"),
+    "b_tutorial": ("▶️", "Menu button: Tutorial"),
+    "b_update": ("📁", "Menu button: All Update File"),
+    "b_support": ("💬", "Menu button: Support"),
+    "r_title": ("🔗", "Referral screen: title"),
+    "r_money": ("💰", "Referral screen: commission line"),
+    "r_invite": ("📣", "Referral screen: invite link line"),
+    "r_send": ("🔗", "Referral screen: Send Link button + share line"),
+    "t_title": ("▶️", "Tutorial screen: title"),
+    "t_watch": ("▶️", "Tutorial screen: Watch Guide Video button"),
+    # purchase / balance confirmation (what the USER receives)
+    "c_title": ("💎", "Confirmation: title"),
+    "c_details": ("📋", "Confirmation: Order Details heading"),
+    "c_point": ("👇", "Confirmation: pointing hand"),
+    "c_order": ("🛡️", "Confirmation: Order ID"),
+    "c_product": ("🛒", "Confirmation: Product"),
+    "c_plan": ("⏱", "Confirmation: Plan"),
+    "c_date": ("📅", "Confirmation: Date"),
+    "c_time": ("⏰", "Confirmation: Time"),
+    "c_amount": ("💰", "Confirmation: Amount"),
+    "c_status": ("💳", "Confirmation: Payment Status"),
+    "c_ok": ("✅", "Confirmation: Successful tick"),
+    "c_key": ("🔑", "Confirmation: Your License Key"),
+    "c_arrow": ("➡️", "Confirmation: arrow before the key"),
+    "c_addbal": ("🎉", "Confirmation: Add Wallet Balance"),
+    "c_curbal": ("➕", "Confirmation: Current Balance"),
+    "c_shield": ("🛡️", "Confirmation: thank-you line"),
+    "c_rocket": ("🚀", "Confirmation: rocket"),
+    "c_line": ("➖", "Confirmation: divider line (repeated 10 times)"),
+    # admin notifications
+    "n_alert": ("🚨", "Admin alert: siren in the title"),
+    "n_user": ("👤", "Admin alert: Name / User"),
+    "n_link": ("🔗", "Admin alert: Username"),
+    "n_id": ("🆔", "Admin alert: Telegram ID / Chat ID / Order ID"),
+    "n_phone": ("📱", "Admin alert: Phone"),
+    "n_globe": ("🌐", "Admin alert: Country"),
+    "n_type": ("👥", "Admin alert: Account type"),
+    "n_game": ("🎮", "Admin alert: Product / Hack purchased"),
+    "n_plan": ("⏱", "Admin alert: Plan"),
+    "n_money": ("💰", "Admin alert: Price / Amount"),
+    "n_method": ("💳", "Admin alert: Payment method"),
+    "n_key": ("🔑", "Admin alert: Key"),
+    "n_date": ("📅", "Admin alert: Date / Time"),
+    "n_wallet": ("💼", "Admin alert: Wallet / Balance"),
+    "n_cash": ("💵", "Admin alert: Amount added"),
+    "n_diamond": ("💎", "Admin alert: Total hack purchase value"),
+    "n_inbox": ("📥", "Admin alert: Total deposited"),
+    "n_tag": ("🏷️", "Admin alert: UTR / Transaction ID"),
+    "n_fail": ("❌", "Admin alert: Status (key not delivered)"),
+    "n_note": ("📝", "Admin alert: Reason"),
+    "n_chat": ("💬", "Admin alert: Chat ID"),
+    "n_box": ("📦", "Admin alert: Product (failed order)"),
 }
+
+# how the website "Premium Emoji" page groups the slots
+EMOJI_GROUPS = [
+    ("Main menu buttons", ["b_shop", "b_addbal", "b_history", "b_profile", "b_referral", "b_tutorial", "b_update", "b_support"]),
+    ("Main menu text", ["top", "party", "bars", "key", "fire", "shield", "gift", "h24", "tap"]),
+    ("Referral screen", ["r_title", "r_money", "r_invite", "r_send"]),
+    ("Tutorial screen", ["t_title", "t_watch"]),
+    ("Shop & checkout", ["cart", "lineup", "crown", "chart", "time", "money", "receipt", "idcard", "phone", "coupon", "bag",
+                         "upi", "binance", "local", "qr", "back", "home", "cancel", "confirm"]),
+    ("Purchase / balance confirmation (user gets this)", ["c_title", "c_details", "c_point", "c_order", "c_product", "c_plan", "c_date",
+                         "c_time", "c_amount", "c_status", "c_ok", "c_key", "c_arrow", "c_addbal", "c_curbal", "c_shield", "c_rocket", "c_line"]),
+    ("Admin notifications (you get these)", ["n_alert", "n_user", "n_link", "n_id", "n_phone", "n_globe", "n_type", "n_game", "n_plan",
+                         "n_money", "n_method", "n_key", "n_date", "n_wallet", "n_cash", "n_diamond", "n_inbox", "n_tag", "n_fail", "n_note",
+                         "n_chat", "n_box"]),
+]
 
 SETTINGS_DEFAULTS = {
     "shop_name": "RG CHEAT SHOP",
@@ -96,6 +168,22 @@ SETTINGS_DEFAULTS = {
     "verify_on": "1",
     "force_inr": "1",
     "inr_done": "0",
+    "emoji_all_products": "",
+    "emoji_all_plans": "",
+    "emoji_split_done": "0",
+    "notify_chat": "",
+    "notify_purchase": "1",
+    "notify_topup": "1",
+    "notify_newuser": "1",
+    "notify_fail": "1",
+    "panel_url": "https://official2-qg3g.onrender.com",
+    "panel_token": "",
+    "panel_connected": "0",
+    "panel_mk_reseller": "25",
+    "panel_mk_user": "200",
+    "panel_autosync": "1",
+    "panel_sync_min": "60",
+    "panel_last_sync": "0",
     "shop_bullets": "🛡 Premium Keys\n🔥 Instant Delivery\n🚫 Secure Payment\n💎 24/7 Support",
 }
 RATES = {"INR": 1, "BDT": 1.4, "PKR": 3.3, "NPR": 1.6, "LKR": 3.6, "AED": 0.044, "USD": 0.012, "GBP": 0.0095}
@@ -166,8 +254,13 @@ def init():
         """)
         for ddl in ("ALTER TABLE pay_orders ADD COLUMN pay_amount REAL DEFAULT 0",
                     "ALTER TABLE products ADD COLUMN link TEXT DEFAULT ''",
+                    "ALTER TABLE products ADD COLUMN emoji_id TEXT DEFAULT ''",
                     "ALTER TABLE pay_orders ADD COLUMN method TEXT DEFAULT 'qr'",
                     "ALTER TABLE pay_orders ADD COLUMN proof TEXT DEFAULT ''",
+                    "ALTER TABLE products ADD COLUMN api_pid INTEGER DEFAULT 0",
+                    "ALTER TABLE plans ADD COLUMN api_plan_id INTEGER DEFAULT 0",
+                    "ALTER TABLE plans ADD COLUMN base_price REAL DEFAULT 0",
+                    "ALTER TABLE plans ADD COLUMN manual INTEGER DEFAULT 0",
                     "ALTER TABLE deposits ADD COLUMN utr TEXT DEFAULT ''",
                     "ALTER TABLE deposits ADD COLUMN proof TEXT DEFAULT ''"):
             try:
@@ -208,8 +301,24 @@ def emoji(key):
             m = c.execute("SELECT v FROM settings WHERE k='emoji_mode'").fetchone()
             blocked = bool(m and m["v"] == "blocked")
             _ec["d"] = {r["k"]: (r["fallback"], "" if blocked else r["eid"]) for r in c.execute("SELECT * FROM emojis")}
+            _ec["blocked"] = blocked
         _ec["t"] = time.time()
     return _ec["d"].get(key, ("", ""))
+
+
+def emoji_direct(eid, fb=""):
+    """premium emoji by a raw ID (product / plan emoji). Returns (fallback, id) - id is empty when Telegram blocks premium emoji."""
+    emoji("top")
+    return fb, ("" if _ec.get("blocked") else (eid or ""))
+
+
+def product_eid(p):
+    """emoji ID of a product: its own ID first, else the 'one emoji for ALL products' ID, else ''"""
+    try:
+        own = (p["emoji_id"] or "").strip()
+    except (KeyError, IndexError):
+        own = ""
+    return own or get("emoji_all_products").strip()
 
 
 # ---------- users ----------
@@ -278,6 +387,23 @@ def migrate_inr():
             c.execute("UPDATE users SET balance=?, ref_balance=?, currency='INR', symbol='₹' WHERE id=?",
                       (round(r["balance"] / k, 2), round(r["ref_balance"] / k, 2), r["id"]))
     put("inr_done", "1")
+
+
+def migrate_v9():
+    """V9: buttons got their own emoji slots. Old IDs are copied once.
+    The Referral slots (b_referral, r_title, r_send) start EMPTY on purpose - set them fresh in Premium Emoji."""
+    if get("emoji_split_done") == "1":
+        return
+    copy = {"b_shop": "sale", "b_addbal": "money", "b_history": "history", "b_profile": "user", "b_tutorial": "yt",
+            "b_update": "folder", "b_support": "support", "r_money": "money", "r_invite": "megaphone",
+            "t_title": "yt", "t_watch": "yt"}
+    with conn() as c:
+        for new, old in copy.items():
+            o = c.execute("SELECT eid FROM emojis WHERE k=?", (old,)).fetchone()
+            if o and o["eid"]:
+                c.execute("UPDATE emojis SET eid=? WHERE k=? AND eid=''", (o["eid"], new))
+    put("emoji_split_done", "1")
+    emoji_clear()
 
 
 def find_order(q):
@@ -366,7 +492,8 @@ def price_for(u, pl):
 
 def products(active_only=True):
     q = """SELECT p.*,
-      (SELECT COUNT(*) FROM keys k JOIN plans pl ON pl.id=k.plan_id WHERE pl.product_id=p.id AND k.used=0) stock,
+      (SELECT COUNT(*) FROM keys k JOIN plans pl ON pl.id=k.plan_id WHERE pl.product_id=p.id AND k.used=0)
+        + (SELECT COUNT(*) * 999999 FROM plans pl WHERE pl.product_id=p.id AND pl.active=1 AND pl.api_plan_id>0) stock,
       (SELECT COUNT(*) FROM plans pl WHERE pl.product_id=p.id) nplans FROM products p"""
     if active_only:
         q += " WHERE p.active=1"
@@ -380,7 +507,7 @@ def product(pid):
 
 
 def plans_of(pid, active_only=True):
-    q = """SELECT pl.*, (SELECT COUNT(*) FROM keys k WHERE k.plan_id=pl.id AND k.used=0) stock,
+    q = """SELECT pl.*, CASE WHEN pl.api_plan_id>0 THEN 999999 ELSE (SELECT COUNT(*) FROM keys k WHERE k.plan_id=pl.id AND k.used=0) END stock,
            (SELECT COUNT(*) FROM keys k WHERE k.plan_id=pl.id AND k.used=1) sold
            FROM plans pl WHERE pl.product_id=?"""
     if active_only:
@@ -392,7 +519,7 @@ def plans_of(pid, active_only=True):
 def plan(plid):
     with conn() as c:
         return c.execute("""SELECT pl.*, p.name pname, p.active pactive,
-            (SELECT COUNT(*) FROM keys k WHERE k.plan_id=pl.id AND k.used=0) stock
+            CASE WHEN pl.api_plan_id>0 THEN 999999 ELSE (SELECT COUNT(*) FROM keys k WHERE k.plan_id=pl.id AND k.used=0) END stock
             FROM plans pl JOIN products p ON p.id=pl.product_id WHERE pl.id=?""", (plid,)).fetchone()
 
 
@@ -502,6 +629,53 @@ def buy(uid, plan_id, coupon="", ext_price=None):
         order = {"order_no": no, "product": pl["pname"], "plan": pl["name"], "price": price, "key": k["code"],
                  "created": now, "plan_id": plan_id}
         return ("ok", order, left)
+
+
+def api_reserve(uid, plan_id, coupon="", ext_price=None):
+    """Panel-API plan, step 1 (atomic): check everything and take the money from the wallet.
+    ext_price = already paid by QR/UPI (wallet not charged).
+    Returns ('go', price, plan_row) | ('bal', price) | ('coupon', msg) | ('gone',) | ('refund', amount)"""
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        u = c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        pl = c.execute("""SELECT pl.*, p.name pname FROM plans pl JOIN products p ON p.id=pl.product_id
+                          WHERE pl.id=? AND pl.active=1 AND p.active=1 AND pl.api_plan_id>0""", (plan_id,)).fetchone()
+        if not u or not pl:
+            if ext_price and u:
+                c.execute("UPDATE users SET balance=ROUND(balance+?,2) WHERE id=?", (ext_price, uid))
+                return ("refund", ext_price)
+            return ("gone",)
+        price = price_for(u, pl)
+        if ext_price is not None:
+            price = ext_price
+        elif coupon:
+            d, err = _coupon_discount(c, u, pl, coupon, price)
+            if err:
+                return ("coupon", err)
+            price = round(price - d, 2)
+        if ext_price is None:
+            if u["balance"] < price:
+                return ("bal", price)
+            c.execute("UPDATE users SET balance=ROUND(balance-?,2) WHERE id=?", (price, uid))
+        return ("go", price, pl)
+
+
+def api_finish_ok(uid, pl, price, key, coupon="", ext_price=None):
+    """Panel-API plan, step 2: the panel returned a key -> save the order. Same result as buy()."""
+    no, now = new_order_no(), int(time.time())
+    order = {"order_no": no, "product": pl["pname"], "plan": pl["name"], "price": price, "key": key,
+             "created": now, "plan_id": pl["id"]}
+    try:
+        with conn() as c:
+            c.execute("INSERT INTO orders(order_no,user_id,product,plan,price,key,created) VALUES(?,?,?,?,?,?,?)",
+                      (no, uid, pl["pname"], pl["name"], price, key, now))
+            if coupon and ext_price is None:
+                c.execute("UPDATE coupons SET used=used+1 WHERE code=?", (coupon.upper(),))
+                c.execute("INSERT INTO coupon_uses(code,user_id,created) VALUES(?,?,?)", (coupon.upper(), uid, now))
+    except Exception:
+        import traceback
+        traceback.print_exc()        # the key must still reach the customer
+    return ("ok", order, 999999)
 
 
 def coupon_consume(uid, code):

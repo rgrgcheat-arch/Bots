@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 from urllib.parse import quote
 from concurrent.futures import ThreadPoolExecutor
 import requests
-import db, gateway
+import db, gateway, panel
 
 try:
     import segno
@@ -182,8 +182,20 @@ def E(key):
     return f'<tg-emoji emoji-id="{eid}">{fb}</tg-emoji>' if eid else fb
 
 
-def B(text, cb=None, url=None, style=None, ek=None):
-    fb, eid = db.emoji(ek) if ek else ("", "")
+def EX(eid, key):
+    """premium emoji from a raw ID (product / plan emoji); no ID -> the normal slot `key`"""
+    if eid:
+        fb, e = db.emoji_direct(eid, db.emoji(key)[0])
+        return f'<tg-emoji emoji-id="{e}">{fb}</tg-emoji>' if e else fb
+    return E(key)
+
+
+def B(text, cb=None, url=None, style=None, ek=None, eid=None):
+    """button. eid = raw premium emoji ID (wins over the slot `ek`)"""
+    if eid:
+        fb, eid = db.emoji_direct(eid, db.emoji(ek)[0] if ek else "")
+    else:
+        fb, eid = db.emoji(ek) if ek else ("", "")
     b = {}
     if eid:
         b["text"] = text
@@ -248,14 +260,14 @@ def menu_screen(u):
         f"{E('tap')} <b>Tap Product Store Now to Start!</b>"
     )
     upd = link(db.get("update_url"), "url")
-    row_upd = B("All Update File", url=upd, style="success", ek="folder") if upd else \
-        B("All Update File", cb="noupd", style="success", ek="folder")
+    row_upd = B("All Update File", url=upd, style="success", ek="b_update") if upd else \
+        B("All Update File", cb="noupd", style="success", ek="b_update")
     kb = KB(
-        [B("Shop Now", cb="shop", style="primary", ek="sale")],
-        [B("Add Balance", cb="addbal", style="success", ek="money"), B("All History", cb="hist", style="success", ek="history")],
-        [B("My Profile", cb="profile", style="success", ek="user"), B("Referral", cb="ref", style="success", ek="share")],
-        [B("Tutorial", cb="tut", style="success", ek="yt"), row_upd],
-        [B("Support", cb="sup", style="success", ek="support")],
+        [B("Shop Now", cb="shop", style="primary", ek="b_shop")],
+        [B("Add Balance", cb="addbal", style="success", ek="b_addbal"), B("All History", cb="hist", style="success", ek="b_history")],
+        [B("My Profile", cb="profile", style="success", ek="b_profile"), B("Referral", cb="ref", style="success", ek="b_referral")],
+        [B("Tutorial", cb="tut", style="success", ek="b_tutorial"), row_upd],
+        [B("Support", cb="sup", style="success", ek="b_support")],
     )
     return text, kb
 
@@ -335,16 +347,16 @@ def profile_screen(u):
 def ref_screen(u):
     lk = f"https://t.me/{BOT_USERNAME['v']}?start=ref_{u['id']}"
     text = (
-        f"{E('share')} <b>Referral Program</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+        f"{E('r_title')} <b>Referral Program</b>\n━━━━━━━━━━━━━━━━━━━━\n"
         f"Status: Active 🟢\n\n"
-        f"{E('money')} Earn exclusive commissions on referred purchases! ⭐\n"
+        f"{E('r_money')} Earn exclusive commissions on referred purchases! ⭐\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"{E('megaphone')} <b>Your Invite Link:</b>\n<code>{lk}</code>\n"
+        f"{E('r_invite')} <b>Your Invite Link:</b>\n<code>{lk}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{E('share')} <b>Share your link to grow your earnings!</b>"
+        f"{E('r_send')} <b>Share your link to grow your earnings!</b>"
     )
     share = f"https://t.me/share/url?url={quote(lk)}&text={quote('Best game keys store! Join here:')}"
-    rows = [[B("Send Link", url=share, style="success", ek="share")]]
+    rows = [[B("Send Link", url=share, style="success", ek="r_send")]]
     if u["ref_balance"] > 0:
         rows.append([B(f"Claim {fmt(u, u['ref_balance'])} to wallet", cb="claim", style="primary", ek="gift2")])
     rows.append([back_btn()])
@@ -353,8 +365,8 @@ def ref_screen(u):
 
 def tut_screen(u):
     text = (
-        f"{E('yt')} ━ <b>VIDEO TUTORIALS</b> ━ {E('yt')}\n━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{E('yt')} <b>Learn How To Use Our Products</b>\n\n"
+        f"{E('t_title')} ━ <b>VIDEO TUTORIALS</b> ━ {E('t_title')}\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{E('t_title')} <b>Learn How To Use Our Products</b>\n\n"
         f"├ {E('fire')} Step-By-Step Guides\n├ {E('key')} Game Setup Tutorials\n"
         f"├ {E('support')} Installation Help\n└ ⭐ Tips &amp; Tricks\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n{E('tap')} <b>Click Any Tutorial Below:</b>"
@@ -362,7 +374,7 @@ def tut_screen(u):
     rows = []
     v = link(db.get("tutorial_url"), "url")
     if v:
-        rows.append([B("Watch Guide Video", url=v, style="primary", ek="yt")])
+        rows.append([B("Watch Guide Video", url=v, style="primary", ek="t_watch")])
     rows.append([back_btn()])
     return text, KB(*rows)
 
@@ -410,7 +422,7 @@ def shop_screen(u):
     prods = db.products()
     for p in prods:
         tag = "" if p["stock"] else " · Sold out"
-        rows.append([B(p["name"] + tag, cb=f"p:{p['id']}", style="primary", ek="cart")])
+        rows.append([B(p["name"] + tag, cb=f"p:{p['id']}", style="primary", ek="cart", eid=db.product_eid(p))])
     text += (f"{E('shield')} <b>Pick what you want</b> {E('tap')}\nTap any product to see options." if prods
              else "<i>No products available yet.</i>")
     rows.append([back_btn()])
@@ -421,19 +433,20 @@ def prod_screen(u, pid):
     p = db.product(pid)
     if not p or not p["active"]:
         return shop_screen(u)
-    text = (f"<blockquote>{E('cart')} <b>{esc(p['name'])}</b></blockquote>\n\n"
+    text = (f"<blockquote>{EX(db.product_eid(p), 'cart')} <b>{esc(p['name'])}</b></blockquote>\n\n"
             f"<blockquote>{E('crown')} Account Type: <b>{role_name(u)}</b></blockquote>\n\n"
             f"<blockquote>{E('chart')} <b>See Current Plans &amp; Pricing</b></blockquote>\n\n")
     if p["descr"]:
         text += f"{esc(p['descr'])}\n\n"
     plans = db.plans_of(pid)
+    pe = db.get("emoji_all_plans").strip()      # ONE premium emoji for every plan (empty = normal emoji)
     rows = []
     for n, pl in enumerate(plans):
         price = db.price_for(u, pl)
         br = "└──" if n == len(plans) - 1 else "├──"
-        text += f"{br} {E('time')} {esc(pl['name'])} ➝ {E('money')} {rs(price)}{'' if pl['stock'] > 0 else ' (Sold out)'}\n"
+        text += f"{br} {EX(pe, 'time')} {esc(pl['name'])} ➝ {E('money')} {rs(price)}{'' if pl['stock'] > 0 else ' (Sold out)'}\n"
         if pl["stock"] > 0:
-            rows.append([B(f"Buy {pl['name']} · {rs(price)}", cb=f"pl:{pl['id']}", style="success", ek="cart")])
+            rows.append([B(f"Buy {pl['name']} · {rs(price)}", cb=f"pl:{pl['id']}", style="success", ek="key", eid=pe)])
         else:
             rows.append([B(f"{pl['name']} · Sold out", cb="oos")])
     if plans:
@@ -523,13 +536,17 @@ def plan_screen(u, plid):
     return text, KB(*rows)
 
 
+def menu_btn():
+    return B("Back to Main Menu", cb="menu", style="danger", ek="home")
+
+
 def after_buy_rows(plan_id):
     """Join Telegram (the product's update group) + Main Panel"""
     rows = []
     url = link(db.plan_link(plan_id), "tg")
     if url:
-        rows.append([B("Join Telegram Group", url=url, style="danger", ek="telegram")])
-    rows.append([B("Main Menu", cb="menu", style="danger", ek="home")])
+        rows.append([B("Join Update Group", url=url, style="danger", ek="telegram")])
+    rows.append([menu_btn()])
     return rows
 
 
@@ -550,7 +567,7 @@ def delivery_text(u, o, method, title):
 
 
 def order_screen(u, o):
-    return delivery_text(u, o, "Wallet Method", "WALLET PAYMENT SUCCESSFUL"), KB(*after_buy_rows(o.get("plan_id", 0)))
+    return confirm_purchase_text(u, o), KB(*after_buy_rows(o.get("plan_id", 0)))
 
 
 def send_payment(chat, mid, u, dep_id, amt):
@@ -732,12 +749,324 @@ def reject_pay(no):
     return p
 
 
+# ------------------------------------------------------------------ V9: user confirmations + admin notifications
+def g(r, k, d=""):
+    """safe field read for sqlite rows AND plain dicts"""
+    try:
+        v = r[k]
+    except (KeyError, IndexError):
+        return d
+    return d if v is None else v
+
+
+def safe(fn, *a, **k):
+    """a notification must NEVER break a purchase"""
+    try:
+        return fn(*a, **k)
+    except Exception:
+        traceback.print_exc()
+
+
+def divider():
+    _fb, eid = db.emoji("c_line")
+    if eid:
+        return "".join(f'<tg-emoji emoji-id="{eid}">➖</tg-emoji>' for _ in range(10))
+    return "━" * 18
+
+
+def now_ist():
+    return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def money_sym(u, x):
+    return f"{g(u, 'symbol', '₹')}{float(x):.2f}"
+
+
+def method_label(m):
+    return {"qr": "UPI (Auto QR)", "upi": "UPI (Manual)", "binance": "Binance", "other": "Local Payment"}.get(m, "UPI")
+
+
+def kv(key, label, val):
+    return f"{E(key)} <b>{label}:</b> {val}"
+
+
+def tree(lines):
+    return "\n".join(("└── " if i == len(lines) - 1 else "├── ") + ln for i, ln in enumerate(lines))
+
+
+def code(x):
+    return f"<code>{esc(x)}</code>"
+
+
+def uname_txt(u):
+    un = g(u, "username")
+    return ("@" + esc(un)) if un else "-"
+
+
+def admin_send(text, kb=None):
+    """admin notification -> Settings 'notify chat' (a group / channel) or the admin"""
+    chat = ADMIN_ID
+    v = db.get("notify_chat").strip()
+    if v.lstrip("-").isdigit():
+        chat = int(v)
+    if not chat:
+        return
+    r = send(chat, text, kb)
+    if not r.get("ok") and kb:
+        r = send(chat, text)
+    if not r.get("ok") and ADMIN_ID and chat != ADMIN_ID:
+        send(ADMIN_ID, text)
+
+
+def contact_kb(u):
+    un, uid = g(u, "username"), g(u, "id")
+    url = f"https://t.me/{un}" if un else f"tg://user?id={uid}"
+    return KB([B("Contact User", url=url, style="primary", ek="n_user")])
+
+
+def confirm_purchase_text(u, o):
+    """what the USER gets after buying a key (wallet / UPI / Binance)"""
+    ts = o["created"]
+    return (
+        f"{E('c_title')} <b>Purchase Confirmed</b> ✨\n{divider()}\n"
+        f"{E('c_details')} <b>Order Details</b> {E('c_point')}\n\n"
+        f"┣ {E('c_order')} Order ID: <code>{esc(o['order_no'])}</code>\n"
+        f"┣ {E('c_product')} Product: <b>{esc(o['product'])}</b>\n"
+        f"┣ {E('c_plan')} Plan: <b>{esc(o['plan'])}</b>\n"
+        f"┣ {E('c_date')} Date: {ist(ts, '%Y-%m-%d')}\n"
+        f"┣ {E('c_time')} Time: {ist(ts, '%I:%M %p')}\n"
+        f"┣ {E('c_amount')} Amount: <b>{money_sym(u, o['price'])}</b>\n"
+        f"┗ {E('c_status')} Payment Status: {E('c_ok')} <b>Successful</b>\n\n"
+        f"{E('c_key')} <b>Your License Key</b> {E('c_point')}\n\n"
+        f"{E('c_arrow')} <code>{esc(o['key'])}</code>\n\n"
+        f"{divider()}\n"
+        f"{E('c_shield')} <i>We appreciate your trust. Enjoy your purchase!</i> {E('c_rocket')}"
+    )
+
+
+def confirm_topup_text(u, amount, order_id, new_bal):
+    """what the USER gets after adding wallet balance"""
+    ts = int(time.time())
+    return (
+        f"{E('c_title')} <b>Payment Confirmed</b> ✨\n{divider()}\n"
+        f"{E('c_details')} <b>Order Details</b> {E('c_point')}\n\n"
+        f"┣ {E('c_order')} Order ID: <code>{esc(order_id)}</code>\n"
+        f"┣ {E('c_date')} Date: {ist(ts, '%Y-%m-%d')}\n"
+        f"┣ {E('c_time')} Time: {ist(ts, '%I:%M %p')}\n"
+        f"┣ {E('c_amount')} Amount: <b>{money_sym(u, amount)}</b>\n"
+        f"┗ {E('c_status')} Payment Status: {E('c_ok')} <b>Successful</b>\n\n"
+        f"{E('c_addbal')} <b>Add Wallet Balance:</b> {money_sym(u, amount)}\n\n"
+        f"{E('c_curbal')} <b>Current Balance:</b> {money_sym(u, new_bal)}\n"
+        f"{divider()}\n"
+        f"{E('c_ok')} <b>Balance added successfully!</b>\n"
+        f"{E('c_shield')} <i>We appreciate your trust. Enjoy your purchase!</i> {E('c_rocket')}"
+    )
+
+
+def notify_purchase(u, o, method, force=False):
+    """admin: a user / reseller bought a key"""
+    if not force and db.get("notify_purchase") == "0":
+        return
+    cust = tree([
+        kv("n_user", "User", f"<b>{esc(g(u, 'name'))}</b>"),
+        kv("n_link", "Username", uname_txt(u)),
+        kv("n_id", "Telegram ID", code(g(u, "id"))),
+        kv("n_phone", "Phone", code(phone_txt(u))),
+        kv("n_globe", "Country", esc(g(u, "country") or "-")),
+        kv("n_type", "Account Type", f"<b>{role_name(u)}</b>"),
+    ])
+    order = tree([
+        kv("n_game", "Hack Purchased", f"<b>{esc(o['product'])}</b>"),
+        kv("n_plan", "Plan", esc(o["plan"])),
+        kv("n_money", "Price Paid", f"<b>{money_sym(u, o['price'])}</b>"),
+        kv("n_method", "Payment Method", esc(method)),
+        kv("n_key", "Delivered Key", code(o["key"])),
+        kv("n_id", "Order ID", code(o["order_no"])),
+        kv("n_date", "Date/Time", now_ist() + " IST"),
+    ])
+    admin_send(f"{E('n_alert')} <b>NEW HACK PURCHASE NOTIFICATION!</b> {E('n_alert')}\n{LINE}\n\n"
+               f"<b>CUSTOMER</b>\n{cust}\n\n<b>ORDER</b>\n{order}", contact_kb(u))
+
+
+def notify_topup(u, amount, prev, cur, order_id, utr, method, force=False):
+    """admin: wallet balance was added"""
+    if not force and db.get("notify_topup") == "0":
+        return
+    n, spent, dep = db.stats(g(u, "id"))
+    cust = tree([
+        kv("n_user", "Name", f"<b>{esc(g(u, 'name'))}</b>"),
+        kv("n_link", "Username", uname_txt(u)),
+        kv("n_type", "Account Type", f"<b>{role_name(u)}</b>"),
+        kv("n_id", "Telegram / Chat ID", code(g(u, "id"))),
+        kv("n_phone", "Phone Number", code(phone_txt(u))),
+    ])
+    pay = tree([
+        kv("n_cash", "Amount Added", f"<b>{money_sym(u, amount)}</b>"),
+        kv("n_wallet", "Previous Balance", money_sym(u, prev)),
+        kv("n_money", "Current Balance", f"<b>{money_sym(u, cur)}</b>"),
+        kv("n_method", "Payment Method", esc(method)),
+    ])
+    stat = tree([
+        kv("n_game", "Hacks Purchased", str(n)),
+        kv("n_diamond", "Total Hack Purchase Value", money_sym(u, spent)),
+        kv("n_inbox", "Total Deposited", money_sym(u, dep)),
+    ])
+    ids = tree([
+        kv("n_id", "Order ID", code(order_id)),
+        kv("n_tag", "UTR", code(utr or "-")),
+        kv("n_date", "Date/Time", now_ist() + " IST"),
+    ])
+    admin_send(f"{E('n_alert')} <b>NEW WALLET BALANCE ADDED</b> {E('n_alert')}\n{LINE}\n\n"
+               f"<b>CUSTOMER</b>\n{cust}\n\n<b>PAYMENT</b>\n{pay}\n\n<b>STATS</b>\n{stat}\n\n<b>DETAILS</b>\n{ids}", contact_kb(u))
+
+
+def notify_key_failed(u, product, plan, amount, method, order_id, reason, wallet_note, paid=True, force=False):
+    """admin: the key could not be delivered - with everything needed to contact the user"""
+    if not force and db.get("notify_fail") == "0":
+        return
+    title = "PAYMENT SUCCESS — KEY DELIVERY FAILED" if paid else "PURCHASE FAILED — KEY NOT DELIVERED"
+    cust = tree([
+        kv("n_user", "Name", f"<b>{esc(g(u, 'name'))}</b>"),
+        kv("n_link", "Username", uname_txt(u)),
+        kv("n_id", "Telegram User ID", code(g(u, "id"))),
+        kv("n_chat", "Chat ID", code(g(u, "id"))),
+        kv("n_type", "Type", f"<b>{role_name(u)}</b>"),
+        kv("n_phone", "Phone", code(phone_txt(u))),
+    ])
+    order = tree([
+        kv("n_money", "Paid Amount" if paid else "Price", f"<b>{money_sym(u, amount)}</b>"),
+        kv("n_box", "Product", esc(product)),
+        kv("n_plan", "Plan", esc(plan)),
+        kv("n_method", "Payment Method", esc(method)),
+        kv("n_id", "Order ID", code(order_id)),
+        kv("n_fail", "Status", "<b>Key Not Delivered</b>"),
+        kv("n_note", "Reason", esc(reason)),
+        kv("n_wallet", "Wallet", esc(wallet_note)),
+        kv("n_date", "Time", now_ist() + " IST"),
+    ])
+    admin_send(f"{E('n_alert')} <b>{title}</b> {E('n_alert')}\n{LINE}\n\n<b>CUSTOMER</b>\n{cust}\n\n<b>ORDER</b>\n{order}", contact_kb(u))
+
+
+def notify_wallet_fail(u, plid, reason):
+    """wallet purchase that could not be completed (nothing was charged)"""
+    pl = db.plan(plid)
+    notify_key_failed(u, pl["pname"] if pl else "-", pl["name"] if pl else "-", db.price_for(u, pl) if pl else 0,
+                      "Wallet Balance", "-", reason, "Nothing was charged", paid=False)
+
+
+def notify_new_user(u, force=False):
+    """admin: a new user verified / joined"""
+    if not force and db.get("notify_newuser") == "0":
+        return
+    body = tree([
+        kv("n_user", "Name", f"<b>{esc(g(u, 'name'))}</b>"),
+        kv("n_link", "Username", uname_txt(u)),
+        kv("n_id", "User ID", code(g(u, "id"))),
+        kv("n_phone", "Phone Number", code(phone_txt(u))),
+        kv("n_globe", "Country", esc(g(u, "country") or "-")),
+        kv("n_date", "Date/Time", now_ist() + " IST"),
+    ])
+    admin_send(f"{E('n_alert')} <b>NEW USER VERIFIED!</b> {E('n_alert')}\n{LINE}\n\n{body}", contact_kb(u))
+
+
+def sample_data():
+    u = {"id": 123456789, "name": "Sample User", "username": "sample_user", "phone": "919999999999", "country": "IN",
+         "role": "user", "symbol": "₹", "currency": "INR", "balance": 126.0, "ref_balance": 0, "joined": int(time.time())}
+    o = {"order_no": "WAL" + time.strftime("%Y%m%d%H%M%S") + "123456789", "product": "SAMPLE PRODUCT", "plan": "1 days",
+         "price": 25.75, "key": "ABCD-1234-EFGH-5678", "created": int(time.time()), "plan_id": 0}
+    return u, o
+
+
+def send_samples():
+    """website button: sends every new message once to the admin, so you can check text + premium emoji"""
+    if not ADMIN_ID:
+        return False
+    u, o = sample_data()
+    send(ADMIN_ID, "🧪 <b>SAMPLE MESSAGES</b> (fake data) — the 2 messages a USER gets, then the 4 alerts YOU get.")
+    send(ADMIN_ID, confirm_purchase_text(u, o), KB(*after_buy_rows(0)))
+    send(ADMIN_ID, confirm_topup_text(u, 100, "ORD2026111414220951360A", 126.0), KB([menu_btn()]))
+    notify_purchase(u, o, "Wallet Balance", force=True)
+    notify_topup(u, 100, 26.0, 126.0, "ORD2026111414220951360A", "FMPIB6991180428", "UPI (Auto QR)", force=True)
+    notify_key_failed(u, o["product"], o["plan"], o["price"], "Wallet Balance", o["order_no"],
+                      "Wallet payment was processed, but the key could not be issued.", "refunded to the user's wallet automatically", force=True)
+    notify_new_user(u, force=True)
+    return True
+
+
+def send_menu_preview():
+    """website button: sends the real main menu, shop, referral and tutorial screens to the admin"""
+    if not ADMIN_ID:
+        return False
+    u = db.user(ADMIN_ID) or sample_data()[0]
+    for scr in (menu_screen, shop_screen, ref_screen, tut_screen):
+        t, k = scr(u)
+        send(ADMIN_ID, t, k)
+    return True
+
+
 def success_block(u, pay, txn, extra=""):
     return (f"{E('success')} <b>PAYMENT SUCCESSFUL</b>\n━━━━━━━━━━━━━━━━━━━━\n"
             f"├── {E('receipt')} Order ID: <code>{pay['pay_no']}</code>\n"
             f"├── {E('txn')} Transaction ID: <code>{esc(txn or '-')}</code>\n"
             f"├── {E('money')} Amount: <b>{fmt(u, pay['pay_amount'] or pay['amount'])}</b>\n"
             f"├── {E('time')} {ist(int(time.time()))}\n{extra}")
+
+
+_busy = set()
+_busy_lock = threading.Lock()
+
+
+def do_buy(uid, plid, coupon="", ext_price=None, on_go=None):
+    """ONE entry point for buying a key.
+    - plan with keys in the database  -> db.buy (as before)
+    - plan connected to the panel API -> money is reserved, the key is bought from the panel API,
+      and the money is returned if the panel says no.
+    Returns what db.buy returns, plus  ('apifail', reason, price, refunded)  and  ('busy',)."""
+    pl = db.plan(plid)
+    if not pl or not pl["api_plan_id"]:
+        return db.buy(uid, plid, coupon, ext_price)
+    if ext_price is None:                       # wallet purchase: one at a time per user (no double tap)
+        with _busy_lock:
+            if uid in _busy:
+                return ("busy",)
+            _busy.add(uid)
+    try:
+        r = db.api_reserve(uid, plid, coupon, ext_price)
+        if r[0] != "go":
+            return r
+        _, price, plrow = r
+        if on_go:
+            safe(on_go)
+        try:
+            key = panel.buy(plrow["api_plan_id"])
+        except panel.PanelError as e:
+            if e.definite:
+                db.add_balance(uid, price)      # money back: wallet purchase -> refund, UPI/QR payment -> wallet credit
+            return ("apifail", e.msg, price, e.definite)
+        except Exception as e:
+            traceback.print_exc()
+            return ("apifail", "Unexpected error: %s" % str(e)[:120], price, False)
+        return db.api_finish_ok(uid, plrow, price, key, coupon, ext_price)
+    finally:
+        if ext_price is None:
+            with _busy_lock:
+                _busy.discard(uid)
+
+
+def api_fail_texts(u, refunded, price, ref, paid_by_gateway=False):
+    """(text shown to the customer, wallet note for the admin alert)"""
+    if refunded and paid_by_gateway:
+        return (f"{E('info')} Our key system had a small problem, so <b>{fmt(u, price)}</b> was added to your wallet instead. "
+                f"Please try again in a few minutes - or contact support.\n{E('receipt')} Ref: <code>{ref}</code>",
+                f"{fmt(u, price)} credited to the user's wallet automatically")
+    if refunded:
+        return (f"{E('cancel')} <b>Delivery failed</b>\nYour wallet was <b>not charged</b>. Please try again in a few minutes - or contact support.\n"
+                f"{E('receipt')} Ref: <code>{ref}</code>",
+                "Wallet refunded automatically - nothing was charged")
+    return (f"{E('wait')} <b>Your order is being processed</b>\nThe key is taking longer than usual. Our team has been told and will send "
+            f"your key (or refund you) very soon. Please do not buy again.\n{E('receipt')} Ref: <code>{ref}</code>",
+            "NOT refunded automatically (unknown if the panel made the key) - check the panel order history, then send the key "
+            "or add the balance back (Website -> Users)")
 
 
 def complete_pay(pay_no, txn=""):
@@ -752,24 +1081,23 @@ def complete_pay(pay_no, txn=""):
     if pay["chat_id"] and pay["msg_id"]:
         api("deleteMessage", chat_id=pay["chat_id"], message_id=pay["msg_id"])
     chat = pay["chat_id"] or uid
+    mlabel = method_label(pay["method"])
     if pay["kind"] == "topup":
+        prev = u["balance"]
         db.add_balance(uid, pay["amount"])
         db.dep_record_paid(uid, pay["amount"], txn or pay_no)
         u = db.user(uid)
-        text = (success_block(u, pay, txn, f"└── {E('wallet')} Wallet balance: <b>{fmt(u, u['balance'])}</b>\n") +
-                f"\n{E('check')} <b>Wallet recharged successfully!</b>")
-        send(chat, text, KB([B("Shop Now", cb="shop", style="primary", ek="sale")], [back_btn()]))
-        what = "Wallet top-up"
+        send(chat, confirm_topup_text(u, pay["amount"], pay_no, u["balance"]), KB([menu_btn()]))
+        safe(notify_topup, u, pay["amount"], prev, u["balance"], pay_no, txn, mlabel)
     else:
-        res = db.buy(uid, pay["plan_id"], ext_price=pay["amount"])
+        res = do_buy(uid, pay["plan_id"], ext_price=pay["amount"])
         if res[0] == "ok":
             db.coupon_consume(uid, pay["coupon"])
             o = res[1]
             db.pay_update(pay_no, order_no=o["order_no"])
             u = db.user(uid)
-            send(chat, success_block(u, pay, txn, f"└── {E('cart')} {esc(o['product'])} · {esc(o['plan'])}\n"))
-            mname = {"binance": "Binance Method"}.get(pay["method"], "UPI Method")
-            send(chat, delivery_text(u, o, mname, "PAYMENT SUCCESSFUL"), KB(*after_buy_rows(pay["plan_id"])))
+            send(chat, confirm_purchase_text(u, o), KB(*after_buy_rows(pay["plan_id"])))
+            safe(notify_purchase, u, o, mlabel)
             comm = db.pay_commission(uid, o["price"])
             if comm:
                 ru = db.user(comm[0])
@@ -777,16 +1105,24 @@ def complete_pay(pay_no, txn=""):
                     send(ru["id"], f"{E('gift2')} Referral commission: you earned <b>{fmt(ru, comm[1])}</b> from a friend's purchase!")
             if res[2] <= int(db.get("low_stock", "3") or 3) and ADMIN_ID:
                 send(ADMIN_ID, f"{E('box')} Low stock: <b>{esc(o['product'])} · {esc(o['plan'])}</b> has {res[2]} key(s) left.")
-            what = f"Purchase {o['product']} · {o['plan']}"
+        elif res[0] == "apifail":
+            _t, reason, amt_, refunded = res
+            u = db.user(uid)
+            pl = db.plan(pay["plan_id"])
+            utext, wnote = api_fail_texts(u, refunded, amt_, pay_no, paid_by_gateway=True)
+            send(chat, success_block(u, pay, txn, f"└── {E('wallet')} Wallet balance: <b>{fmt(u, u['balance'])}</b>\n") + "\n" + utext,
+                 KB([B("Shop Now", cb="shop", style="primary", ek="b_shop")], [back_btn()]))
+            safe(notify_key_failed, u, pl["pname"] if pl else pay["title"], pl["name"] if pl else "-", pay["amount"], mlabel,
+                 pay_no, "Panel API: " + reason, wnote)
         else:
             u = db.user(uid)
             send(chat, success_block(u, pay, txn, f"└── {E('wallet')} Wallet balance: <b>{fmt(u, u['balance'])}</b>\n") +
                  f"\n{E('info')} The item just went out of stock, so <b>{fmt(u, pay['amount'])}</b> was added to your wallet instead. "
-                 f"You can buy another plan with it.", KB([B("Shop Now", cb="shop", style="primary", ek="sale")], [back_btn()]))
-            what = "Purchase (out of stock -> refunded to wallet)"
-    if ADMIN_ID:
-        send(ADMIN_ID, f"{E('paid')} <b>Payment received</b>\n{what}\nUser: <code>{uid}</code> {esc(u['name'])}\n"
-                       f"Amount: <b>{fmt(u, pay['amount'])}</b>\nOrder: <code>{pay_no}</code> · Txn: <code>{esc(txn or '-')}</code>")
+                 f"You can buy another plan with it.", KB([B("Shop Now", cb="shop", style="primary", ek="b_shop")], [back_btn()]))
+            pl = db.plan(pay["plan_id"])
+            safe(notify_key_failed, u, pl["pname"] if pl else pay["title"], pl["name"] if pl else "-", pay["amount"], mlabel,
+                 pay_no, "Payment received but the key could not be issued (out of stock).",
+                 f"{fmt(u, pay['amount'])} credited to the user's wallet automatically")
     return pay
 
 
@@ -856,8 +1192,9 @@ def approve_deposit(did, ok=True):
     u = db.user(d["user_id"])
     if u:
         if ok:
-            send(u["id"], f"{E('check')} <b>Deposit approved!</b>\n{fmt(u, d['amount'])} added to your wallet.\n"
-                          f"{E('wallet')} New balance: <b>{fmt(u, u['balance'])}</b>")
+            prev = round(u["balance"] - d["amount"], 2)
+            send(u["id"], confirm_topup_text(u, d["amount"], f"DEP{did}", u["balance"]), KB([menu_btn()]))
+            safe(notify_topup, u, d["amount"], prev, u["balance"], f"DEP{did}", d["utr"], "UPI (Manual)")
         else:
             send(u["id"], f"❌ <b>Deposit #{did} was rejected.</b>\nIf you really paid, contact support with your payment proof.")
     return d
@@ -969,9 +1306,12 @@ def on_message(m):
                 ref = int(parts[1][4:])
             except ValueError:
                 pass
-        u = db.autoverify(db.ensure_user(fr, ref))
+        u0 = db.ensure_user(fr, ref)
+        u = db.autoverify(u0)
         if u["banned"]:
             return
+        if u["verified"] and not u0["verified"]:        # phone check is OFF -> the user counts as verified now
+            safe(notify_new_user, u)
         send_menu(chat, u) if u["verified"] else ask_phone(chat)
         return
 
@@ -981,8 +1321,11 @@ def on_message(m):
             send(chat, "❌ Please share <b>your own</b> number using the button.")
             return
         u = db.ensure_user(fr)
+        was_verified = bool(u["verified"])
         phone = "".join(ch for ch in c["phone_number"] if ch.isdigit())
         refby = db.verify(uid, phone)
+        if not was_verified:
+            safe(notify_new_user, db.user(uid))
         if refby:
             reward = float(db.get("ref_reward", "2"))
             db.add_ref_balance(refby, reward)
@@ -1238,7 +1581,18 @@ def on_cb(cq):
         return
     elif data.startswith("buy:"):
         plid_b = int(data[4:])
-        res = db.buy(uid, plid_b, db.cp_get(uid, plid_b))
+        res = do_buy(uid, plid_b, db.cp_get(uid, plid_b), on_go=lambda: ans(cq, "⏳ Processing your order..."))
+        if res[0] == "busy":
+            ans(cq, "Your previous order is still processing. Please wait a moment.", True)
+            return
+        if res[0] == "apifail":
+            _t, reason, price_, refunded = res
+            u3, pl3, ref = db.user(uid), db.plan(plid_b), db.new_order_no()
+            utext, wnote = api_fail_texts(u3, refunded, price_, ref)
+            safe(notify_key_failed, u3, pl3["pname"] if pl3 else "-", pl3["name"] if pl3 else "-", price_, "Wallet Balance", ref,
+                 "Panel API: " + reason, wnote, paid=not refunded)
+            send(chat, utext, KB([menu_btn()]))
+            return
         if res[0] == "coupon":
             ans(cq, res[1], True)
             return
@@ -1246,6 +1600,7 @@ def on_cb(cq):
             db.cp_set(uid, 0, "")
             u2 = db.user(uid)
             sh(*order_screen(u2, res[1]))
+            safe(notify_purchase, u2, res[1], "Wallet Balance")
             comm = db.pay_commission(uid, res[1]["price"])
             if comm:
                 ru = db.user(comm[0])
@@ -1257,6 +1612,7 @@ def on_cb(cq):
             ans(cq, "Insufficient wallet balance. Add balance, or pay via UPI / Binance.", True)
             return
         elif res[0] == "stock":
+            safe(notify_wallet_fail, u, plid_b, "Out of stock - the key could not be issued.")
             ans(cq, "Sorry, this plan just sold out.", True)
             return
         else:

@@ -1,4 +1,4 @@
-RG Shop Bot - V8  (includes everything from V1 to V7)
+RG Shop Bot - V10 = PART 10 / 2 (FINAL)  (includes everything from V1 to V9 part 9)
 =====================================================
 Replace ALL files in your GitHub repo with these and redeploy. Old data is kept. Env variables are the same.
 
@@ -46,3 +46,62 @@ V8 CHANGES
   Website -> "Find Order": type the order ID (ORD... payment order, WAL... shop order), a transaction ID or a user ID -> shows the user
   (name, ID, @username, phone, wallet) and the order details. Website -> QR Payments also has a search box.
   Telegram (admin only): /find ORD2026...  gives the same details in the bot.
+
+================ V9 - PART 9 (first half) ================
+1) PREMIUM EMOJI - every button / line has its OWN slot (Website -> Premium Emoji, grouped)
+   - Main menu: Shop Now, Add Balance, All History, My Profile, Referral, Tutorial, All Update File, Support = 8 separate slots.
+   - Referral screen and Tutorial screen have their own slots too. Old IDs are copied once; the 3 Referral slots start EMPTY
+     (set the emoji you want there). Saving warns you if the same ID is used in two places.
+   - Button "Send main menu / shop / referral / tutorial to my Telegram" = real preview.
+2) PRODUCT + PLAN EMOJI (Website -> Products)
+   - "One emoji for ALL products" and "One emoji for ALL plans (A to Z)". Plans: shown on every plan line and Buy button.
+   - Single product: open the product -> "Premium emoji ID for THIS product" (wins over the all-products emoji).
+   - "Save & use for ALL products" clears every single-product emoji.
+3) USER MESSAGES (new style, premium emoji slots 'Purchase / balance confirmation')
+   - Key bought (wallet / UPI / Binance): Purchase Confirmed + Order Details + License Key.  Buttons: Join Update Group + Back to Main Menu.
+   - Balance added: Payment Confirmed + Add Wallet Balance + Current Balance.  Button: Back to Main Menu only.
+4) ADMIN NOTIFICATIONS (premium emoji slots 'Admin notifications'; each has a Contact User button)
+   - NEW HACK PURCHASE (user or reseller, any payment method)
+   - NEW WALLET BALANCE ADDED (previous / current balance, hacks purchased, total deposited, UTR)
+   - PAYMENT SUCCESS - KEY DELIVERY FAILED (name, username, user ID, chat ID, phone ... + refund note)
+   - NEW USER VERIFIED
+   Settings -> "Admin notifications": ON/OFF for each, optional group/channel chat ID,
+   and "Send sample messages to my Telegram" to preview everything with fake data.
+
+================ V10 - PART 10 (second half): PANEL API ================
+New file: panel.py.  New website tab: "Panel API".   Files changed: db.py, bot.py, web.py, main.py.
+Replace ALL files in your GitHub repo and redeploy. Old data is kept (new columns are added automatically).
+
+1) CONNECT  (Website -> Panel API -> step 1)
+   Server URL (default https://official2-qg3g.onrender.com) + API token. Both can be changed any time.
+   [Save & Connect] -> "Connect successful (username, balance ... INR)" or the exact problem (Invalid API token ...).
+   [Check Balance] -> your panel balance.   [Show Products] -> every product that exists on your panel.
+   (A sleeping Render panel can need up to a minute for the first call - just press again.)
+
+2) ADD PRODUCTS  (Show Products)
+   Tick the products you want and press [Add selected], or press [Add ALL products].
+   Products, plans and prices come from the panel; you never add them by hand. Keys are bought from the panel
+   automatically when a customer buys (wallet, UPI QR, Binance - all payment methods).
+   Adding again later is safe: it only refreshes prices and adds NEW plans.
+
+3) YOUR PRICES = PANEL PRICE + %   (Panel API -> step 2)
+   Reseller %  (default 25)   and   User %  (default 200)  -> panel price 100 = reseller 125 / user 300.
+   [Save %] = new products use it.   [Save & apply to ALL products] = every product is re-priced at once.
+   A price you edit by hand on a product page is kept ("price: manual"); press [Auto] there to go back to the % price.
+   The Products page shows the "Panel cost" of every plan.
+
+4) AUTO PRICE SYNC (Panel API -> step 3)
+   Every X minutes (default 60) the bot reads the panel prices again, applies your % and adds new plans.
+   [Sync prices now] does it immediately.  Can be switched OFF.
+
+5) WHEN A PURCHASE FAILS (panel says no / panel down / no panel balance)
+   - Panel clearly refuses -> money is returned AUTOMATICALLY (wallet purchase: wallet refunded;
+     UPI/QR payment: the amount is added to the user's wallet). The user gets a clear message.
+   - Panel does not answer / crashes (unknown if the key was made) -> NO automatic refund, so you can never lose a key
+     AND the money. The user is told "your order is being processed, do not buy again".
+   - In both cases YOU get the alert immediately (name, username, user ID, chat ID, phone, product, plan, amount,
+     order ID, reason, what happened to the wallet) with a Contact User button.
+     For the "unknown" case check the panel order history, then send the key or add balance (Website -> Users).
+   - Double tap on Buy while the panel is working is blocked ("previous order still processing").
+
+Products you added the old way (keys pasted by hand) keep working exactly as before.
